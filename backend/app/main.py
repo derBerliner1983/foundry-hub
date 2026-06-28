@@ -1,0 +1,369 @@
+"""FastAPI-App: REST-API, Hintergrund-Orchestrator und Auslieferung der Web-UI."""
+import asyncio
+import json
+import os
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from . import orchestrator as orch
+from . import providers
+from .config import config
+from .database import Base, SessionLocal, engine
+from .models import (
+    Agent,
+    Event,
+    Message,
+    PendingApproval,
+    Project,
+    Rating,
+    Settings,
+    Task,
+)
+from .roles import ROLES, role_title
+from .seed import ensure_seed
+
+app = FastAPI(title="AI-Hub", version="1.0")
+
+FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "frontend")
+
+
+# --------------------------------------------------------------------------- #
+# Lebenszyklus
+# --------------------------------------------------------------------------- #
+@app.on_event("startup")
+async def startup():
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        ensure_seed(db)
+    finally:
+        db.close()
+    asyncio.create_task(orchestrator_loop())
+
+
+async def orchestrator_loop():
+    """Lässt die Agenten kontinuierlich arbeiten, solange offene Arbeit existiert."""
+    while True:
+        try:
+            db = SessionLocal()
+            try:
+                await orch.tick(db)
+            finally:
+                db.close()
+        except Exception as e:  # noqa: BLE001
+            print("Orchestrator-Fehler:", e)
+        await asyncio.sleep(config.TICK_INTERVAL_SECONDS)
+
+
+# --------------------------------------------------------------------------- #
+# Serialisierung
+# --------------------------------------------------------------------------- #
+def agent_dict(db, a: Agent):
+    return {
+        "id": a.id, "name": a.name, "role": a.role, "title": role_title(a.role),
+        "provider": a.provider, "model": a.model, "status": a.status,
+        "manager_id": a.manager_id, "project_id": a.project_id,
+        "rating": orch.avg_rating(db, a.id),
+        "rating_count": db.query(Rating).filter(Rating.ratee_agent_id == a.id).count(),
+    }
+
+
+def msg_dict(db, m: Message):
+    sender = "Nutzer"
+    if m.sender_kind == "agent" and m.sender_agent_id:
+        sa = db.get(Agent, m.sender_agent_id)
+        sender = sa.name if sa else f"#{m.sender_agent_id}"
+    elif m.sender_kind == "system":
+        sender = "System"
+    recipient = "Nutzer"
+    if m.recipient_kind == "agent" and m.recipient_agent_id:
+        ra = db.get(Agent, m.recipient_agent_id)
+        recipient = ra.name if ra else f"#{m.recipient_agent_id}"
+    return {
+        "id": m.id, "sender": sender, "recipient": recipient,
+        "sender_kind": m.sender_kind, "sender_agent_id": m.sender_agent_id,
+        "recipient_kind": m.recipient_kind, "recipient_agent_id": m.recipient_agent_id,
+        "subject": m.subject, "body": m.body, "requires_answer": m.requires_answer,
+        "answered": m.answered, "created_at": m.created_at.isoformat(),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Request-Modelle
+# --------------------------------------------------------------------------- #
+class NewRequest(BaseModel):
+    title: str
+    description: str = ""
+
+
+class UserMessage(BaseModel):
+    to_agent_id: int | None = None  # None = Chef
+    subject: str = ""
+    body: str
+
+
+class SettingsUpdate(BaseModel):
+    autonomy_level: str | None = None
+    allowed_providers: str | None = None
+    default_chef_provider: str | None = None
+    default_chef_model: str | None = None
+    default_worker_provider: str | None = None
+    default_worker_model: str | None = None
+    auto_run: bool | None = None
+    require_approval_hire: bool | None = None
+    require_approval_fire: bool | None = None
+    fire_threshold: float | None = None
+
+
+class UserRating(BaseModel):
+    agent_id: int
+    score: int
+    feedback: str = ""
+
+
+# --------------------------------------------------------------------------- #
+# API
+# --------------------------------------------------------------------------- #
+@app.get("/api/health")
+def health():
+    return {"status": "ok", "providers": providers.available_providers()}
+
+
+@app.get("/api/state")
+def state():
+    db = SessionLocal()
+    try:
+        chef = db.query(Agent).filter(Agent.role == "ceo").first()
+        agents = db.query(Agent).order_by(Agent.id).all()
+        return {
+            "chef_id": chef.id if chef else None,
+            "agents": [agent_dict(db, a) for a in agents],
+            "open_questions": db.query(Message).filter(
+                Message.recipient_kind == "user",
+                Message.requires_answer == True,  # noqa: E712
+                Message.answered == False).count(),  # noqa: E712
+            "pending_approvals": db.query(PendingApproval).filter(
+                PendingApproval.status == "pending").count(),
+        }
+    finally:
+        db.close()
+
+
+@app.post("/api/requests")
+def create_request(req: NewRequest):
+    """Neue Anfrage des Nutzers an den Chef."""
+    db = SessionLocal()
+    try:
+        chef = ensure_seed(db)
+        project = Project(title=req.title, description=req.description)
+        db.add(project)
+        db.flush()
+        orch.send_message(
+            db, sender_kind="user", sender_agent_id=None,
+            recipient_kind="agent", recipient_agent_id=chef.id,
+            subject="Neue Anfrage: " + req.title,
+            body=req.description or req.title, project_id=project.id,
+        )
+        db.commit()
+        return {"project_id": project.id, "chef_id": chef.id}
+    finally:
+        db.close()
+
+
+@app.post("/api/messages")
+def post_message(m: UserMessage):
+    """Nutzer schreibt an einen beliebigen Agenten (Standard: Chef)."""
+    db = SessionLocal()
+    try:
+        if m.to_agent_id is None:
+            chef = db.query(Agent).filter(Agent.role == "ceo").first()
+            target_id = chef.id if chef else None
+        else:
+            target_id = m.to_agent_id
+        if not target_id:
+            raise HTTPException(404, "Kein Empfänger")
+        # offene Rückfragen an diesen Agenten als beantwortet markieren
+        for q in db.query(Message).filter(
+                Message.sender_agent_id == target_id,
+                Message.requires_answer == True,  # noqa: E712
+                Message.answered == False).all():  # noqa: E712
+            q.answered = True
+        orch.send_message(db, sender_kind="user", sender_agent_id=None,
+                          recipient_kind="agent", recipient_agent_id=target_id,
+                          subject=m.subject or "Antwort", body=m.body)
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.get("/api/messages")
+def list_messages(agent_id: int | None = None, inbox: str | None = None):
+    """inbox=user -> Nachrichten an den Nutzer. agent_id -> Thread mit einem Agenten."""
+    db = SessionLocal()
+    try:
+        q = db.query(Message)
+        if inbox == "user":
+            q = q.filter(Message.recipient_kind == "user")
+        elif agent_id is not None:
+            q = q.filter(
+                ((Message.sender_agent_id == agent_id) & (Message.sender_kind == "agent")) |
+                ((Message.recipient_agent_id == agent_id) & (Message.recipient_kind == "agent"))
+            )
+        msgs = q.order_by(Message.created_at.desc()).limit(200).all()
+        return [msg_dict(db, m) for m in reversed(msgs)]
+    finally:
+        db.close()
+
+
+@app.get("/api/agents/{agent_id}")
+def get_agent(agent_id: int):
+    db = SessionLocal()
+    try:
+        a = db.get(Agent, agent_id)
+        if not a:
+            raise HTTPException(404, "Agent nicht gefunden")
+        data = agent_dict(db, a)
+        data["reports"] = [agent_dict(db, r) for r in
+                           db.query(Agent).filter(Agent.manager_id == a.id).all()]
+        data["tasks"] = [{"id": t.id, "title": t.title, "status": t.status,
+                          "result": t.result} for t in
+                         db.query(Task).filter(Task.assigned_agent_id == a.id).all()]
+        data["ratings"] = [{"score": r.score, "feedback": r.feedback,
+                            "rater": "Nutzer" if r.rater_kind == "user" else f"#{r.rater_agent_id}"}
+                           for r in db.query(Rating).filter(Rating.ratee_agent_id == a.id).all()]
+        return data
+    finally:
+        db.close()
+
+
+@app.get("/api/tasks")
+def list_tasks():
+    db = SessionLocal()
+    try:
+        tasks = db.query(Task).order_by(Task.id.desc()).limit(200).all()
+        return [{"id": t.id, "title": t.title, "description": t.description,
+                 "status": t.status, "assigned_agent_id": t.assigned_agent_id,
+                 "result": t.result} for t in tasks]
+    finally:
+        db.close()
+
+
+@app.post("/api/ratings")
+def rate(r: UserRating):
+    db = SessionLocal()
+    try:
+        db.add(Rating(ratee_agent_id=r.agent_id, rater_kind="user",
+                      score=max(1, min(5, r.score)), feedback=r.feedback))
+        orch.log(db, "rating", f"Nutzer bewertet #{r.agent_id} mit {r.score}/5", agent_id=r.agent_id)
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.get("/api/approvals")
+def list_approvals():
+    db = SessionLocal()
+    try:
+        items = db.query(PendingApproval).filter(
+            PendingApproval.status == "pending").order_by(PendingApproval.id).all()
+        return [{"id": a.id, "summary": a.summary,
+                 "action": json.loads(a.action_json)} for a in items]
+    finally:
+        db.close()
+
+
+@app.post("/api/approvals/{approval_id}/{decision}")
+def decide_approval(approval_id: int, decision: str):
+    db = SessionLocal()
+    try:
+        ap = db.get(PendingApproval, approval_id)
+        if not ap or ap.status != "pending":
+            raise HTTPException(404, "Freigabe nicht gefunden")
+        action = json.loads(ap.action_json)
+        if decision == "approve":
+            ap.status = "approved"
+            if action.get("type") == "hire":
+                orch._create_agent(db, action["role"], action["name"],
+                                   action["provider"], action["model"],
+                                   action.get("manager_id"), action.get("project_id"))
+            elif action.get("type") == "fire":
+                target = db.get(Agent, action["agent_id"])
+                if target:
+                    target.status = "fired"
+                    orch.log(db, "fire", f"{target.name} gekündigt (freigegeben)", agent_id=target.id)
+        else:
+            ap.status = "rejected"
+        db.commit()
+        return {"ok": True, "status": ap.status}
+    finally:
+        db.close()
+
+
+@app.get("/api/events")
+def list_events():
+    db = SessionLocal()
+    try:
+        evs = db.query(Event).order_by(Event.id.desc()).limit(100).all()
+        out = []
+        for e in evs:
+            name = ""
+            if e.agent_id:
+                a = db.get(Agent, e.agent_id)
+                name = a.name if a else f"#{e.agent_id}"
+            out.append({"id": e.id, "kind": e.kind, "agent": name,
+                        "text": e.text, "created_at": e.created_at.isoformat()})
+        return out
+    finally:
+        db.close()
+
+
+@app.get("/api/settings")
+def get_settings():
+    db = SessionLocal()
+    try:
+        s = orch.get_settings(db)
+        return {
+            "autonomy_level": s.autonomy_level,
+            "allowed_providers": s.allowed_providers,
+            "default_chef_provider": s.default_chef_provider,
+            "default_chef_model": s.default_chef_model,
+            "default_worker_provider": s.default_worker_provider,
+            "default_worker_model": s.default_worker_model,
+            "auto_run": s.auto_run,
+            "require_approval_hire": s.require_approval_hire,
+            "require_approval_fire": s.require_approval_fire,
+            "fire_threshold": s.fire_threshold,
+            "providers_available": providers.available_providers(),
+            "roles": {k: role_title(k) for k in ROLES},
+        }
+    finally:
+        db.close()
+
+
+@app.put("/api/settings")
+def update_settings(upd: SettingsUpdate):
+    db = SessionLocal()
+    try:
+        s = orch.get_settings(db)
+        for field, value in upd.model_dump(exclude_none=True).items():
+            setattr(s, field, value)
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+# --------------------------------------------------------------------------- #
+# Web-UI
+# --------------------------------------------------------------------------- #
+if os.path.isdir(FRONTEND_DIR):
+    app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+
+    @app.get("/")
+    def index():
+        return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))

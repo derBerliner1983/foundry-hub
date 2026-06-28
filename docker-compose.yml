@@ -1,0 +1,38 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: aihub-app
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:////data/aihub.db
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - DEFAULT_CHEF_PROVIDER=${DEFAULT_CHEF_PROVIDER:-claude}
+      - DEFAULT_CHEF_MODEL=${DEFAULT_CHEF_MODEL:-claude-opus-4-8}
+      - DEFAULT_WORKER_PROVIDER=${DEFAULT_WORKER_PROVIDER:-claude}
+      - DEFAULT_WORKER_MODEL=${DEFAULT_WORKER_MODEL:-claude-sonnet-4-6}
+      - ALLOW_MOCK_FALLBACK=${ALLOW_MOCK_FALLBACK:-true}
+    volumes:
+      - aihub-data:/data
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  # Lokale Modelle (optional). Modelle vorher ziehen, z. B.:
+  #   docker exec -it aihub-ollama ollama pull llama3.1
+  ollama:
+    image: ollama/ollama:latest
+    container_name: aihub-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  aihub-data:
+  ollama-data:

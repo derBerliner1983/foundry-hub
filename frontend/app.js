@@ -1,0 +1,286 @@
+// AI-Hub Frontend – Vanilla JS, spricht mit der REST-API.
+const api = {
+  async get(p) { const r = await fetch(p); return r.json(); },
+  async post(p, b) { const r = await fetch(p, { method: "POST", headers: { "Content-Type": "application/json" }, body: b ? JSON.stringify(b) : undefined }); return r.json(); },
+  async put(p, b) { const r = await fetch(p, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) }); return r.json(); },
+};
+
+let currentView = "inbox";
+let agentsCache = [];
+let chefId = null;
+let selectedAgent = null; // null = Chef-Inbox (an Nutzer)
+
+const root = document.getElementById("view-root");
+const titleEl = document.getElementById("view-title");
+const TITLES = { inbox: "Inbox", org: "Team / Organisation", tasks: "Aufgaben", approvals: "Freigaben", activity: "Aktivität", settings: "Einstellungen" };
+
+function icons() { window.lucide && lucide.createIcons(); }
+function esc(s) { return (s || "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+function initials(n) { return (n || "?").split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase(); }
+
+// ---------- Navigation ----------
+document.querySelectorAll(".nav-item").forEach(el => {
+  el.addEventListener("click", () => {
+    document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
+    el.classList.add("active");
+    currentView = el.dataset.view;
+    titleEl.textContent = TITLES[currentView];
+    render();
+  });
+});
+
+// ---------- Theme ----------
+document.getElementById("theme-toggle").addEventListener("click", () => {
+  const html = document.documentElement;
+  html.dataset.theme = html.dataset.theme === "dark" ? "light" : "dark";
+});
+
+// ---------- Render-Dispatcher ----------
+async function render() {
+  if (currentView === "inbox") return renderInbox();
+  if (currentView === "org") return renderOrg();
+  if (currentView === "tasks") return renderTasks();
+  if (currentView === "approvals") return renderApprovals();
+  if (currentView === "activity") return renderActivity();
+  if (currentView === "settings") return renderSettings();
+}
+
+// ---------- Inbox ----------
+async function renderInbox() {
+  const state = await api.get("/api/state");
+  agentsCache = state.agents; chefId = state.chef_id;
+  const employed = agentsCache.filter(a => a.status === "employed");
+
+  const options = [`<option value="">📥 Chef-Inbox (an dich)</option>`]
+    .concat(employed.map(a => `<option value="${a.id}" ${selectedAgent == a.id ? "selected" : ""}>${esc(a.name)} – ${esc(a.title)}</option>`)).join("");
+
+  root.innerHTML = `
+    <div class="grid cols-2" style="margin-bottom:16px">
+      <div class="card">
+        <h3><i data-lucide="send"></i> Neue Anfrage an den Chef</h3>
+        <input id="req-title" placeholder="Was möchtest du? (Titel)" />
+        <textarea id="req-desc" placeholder="Beschreibe Wunsch, Ziel, Termin/Frist, Details …"></textarea>
+        <button class="btn" id="req-send"><i data-lucide="rocket"></i> Auftrag senden</button>
+      </div>
+      <div class="card">
+        <h3><i data-lucide="messages-square"></i> Konversation</h3>
+        <label>Postfach wählen</label>
+        <select id="inbox-pick">${options}</select>
+        <textarea id="reply-body" placeholder="Nachricht an dieses Postfach …"></textarea>
+        <button class="btn ghost" id="reply-send"><i data-lucide="reply"></i> Senden</button>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><i data-lucide="inbox"></i> <b>Nachrichten</b>
+        <span class="tag" id="thread-label"></span><i data-lucide="chevron-down" class="chev"></i></div>
+      <div class="panel-body" id="thread"></div>
+    </div>`;
+  icons();
+
+  document.getElementById("req-send").onclick = async () => {
+    const title = document.getElementById("req-title").value.trim();
+    if (!title) return;
+    await api.post("/api/requests", { title, description: document.getElementById("req-desc").value });
+    document.getElementById("req-title").value = ""; document.getElementById("req-desc").value = "";
+    selectedAgent = ""; loadThread();
+  };
+  document.getElementById("inbox-pick").onchange = e => { selectedAgent = e.target.value; loadThread(); };
+  document.getElementById("reply-send").onclick = async () => {
+    const body = document.getElementById("reply-body").value.trim();
+    if (!body) return;
+    const to = selectedAgent === "" || selectedAgent == chefId ? (selectedAgent === "" ? chefId : selectedAgent) : selectedAgent;
+    await api.post("/api/messages", { to_agent_id: to ? Number(to) : null, body });
+    document.getElementById("reply-body").value = ""; loadThread();
+  };
+  setupCollapse();
+  loadThread();
+}
+
+async function loadThread() {
+  const tEl = document.getElementById("thread");
+  if (!tEl) return;
+  let msgs;
+  if (selectedAgent === "" || selectedAgent == null) {
+    msgs = await api.get("/api/messages?inbox=user");
+    document.getElementById("thread-label").textContent = "Chef → du";
+  } else {
+    msgs = await api.get("/api/messages?agent_id=" + selectedAgent);
+    document.getElementById("thread-label").textContent = "Thread";
+  }
+  if (!msgs.length) { tEl.innerHTML = `<div class="empty">Noch keine Nachrichten.</div>`; return; }
+  tEl.innerHTML = msgs.map(m => {
+    const fromUser = m.sender_kind === "user";
+    const cls = m.requires_answer && !m.answered ? "needs-answer" : (fromUser ? "from-user" : "from-agent");
+    return `<div class="msg ${cls}">
+      <div class="meta"><b>${esc(m.sender)}</b> <i data-lucide="arrow-right" style="width:13px"></i> ${esc(m.recipient)}
+        <span class="spacer" style="flex:1"></span>${new Date(m.created_at).toLocaleString("de-DE")}</div>
+      <div class="subject">${esc(m.subject)}</div>
+      <div class="body">${esc(m.body)}</div>
+      ${m.requires_answer && !m.answered ? `<div class="tag" style="margin-top:6px;color:var(--yellow)">⏳ wartet auf deine Antwort</div>` : ""}
+    </div>`;
+  }).join("");
+  icons();
+}
+
+// ---------- Org / Team ----------
+async function renderOrg() {
+  const state = await api.get("/api/state");
+  agentsCache = state.agents; chefId = state.chef_id;
+  const byManager = {};
+  agentsCache.forEach(a => { (byManager[a.manager_id] = byManager[a.manager_id] || []).push(a); });
+
+  function row(a, depth) {
+    const r = a.rating; const p = r ? (r / 5) * 100 : 0;
+    return `<div class="agent-row ${depth ? "indent" : ""}" style="margin-left:${depth * 26}px">
+      <div class="avatar role-${a.role}">${initials(a.name)}</div>
+      <div class="info"><b>${esc(a.name)}</b><small>${esc(a.title)} · ${esc(a.provider)}/${esc(a.model)}</small></div>
+      <div class="donut" style="--p:${p}"><span>${r ?? "–"}</span></div>
+      <span class="pill ${a.status}">${a.status}</span>
+      <button class="btn ghost sm" onclick="openAgent(${a.id})"><i data-lucide="star"></i> bewerten</button>
+    </div>` + (byManager[a.id] || []).map(c => row(c, depth + 1)).join("");
+  }
+  const chef = agentsCache.find(a => a.role === "ceo");
+  root.innerHTML = `<div class="card"><h3><i data-lucide="network"></i> Organigramm</h3>${chef ? row(chef, 0) : `<div class="empty">Kein Chef.</div>`}</div>
+    <div id="agent-detail"></div>`;
+  icons();
+}
+
+window.openAgent = async function (id) {
+  const a = await api.get("/api/agents/" + id);
+  const d = document.getElementById("agent-detail");
+  d.innerHTML = `<div class="card" style="margin-top:16px">
+    <h3><i data-lucide="user"></i> ${esc(a.name)} – ${esc(a.title)}</h3>
+    <div class="row" style="margin-bottom:12px"><span class="tag">${esc(a.provider)}/${esc(a.model)}</span>
+      <span class="pill ${a.status}">${a.status}</span>
+      <span class="muted">Ø Bewertung: ${a.rating ?? "–"} (${a.rating_count})</span></div>
+    <label>Leistung bewerten</label>
+    <div class="stars" id="stars">☆☆☆☆☆</div>
+    <textarea id="rate-fb" placeholder="Feedback (optional)"></textarea>
+    <button class="btn" id="rate-send"><i data-lucide="check"></i> Bewertung speichern</button>
+    <h3 style="margin-top:18px"><i data-lucide="list"></i> Aufgaben</h3>
+    ${a.tasks.length ? a.tasks.map(t => `<div class="msg"><div class="subject">${esc(t.title)} <span class="tag">${t.status}</span></div><div class="body">${esc(t.result || "")}</div></div>`).join("") : `<div class="muted">keine</div>`}
+    <h3 style="margin-top:14px"><i data-lucide="star"></i> Bewertungen</h3>
+    ${a.ratings.length ? a.ratings.map(r => `<div class="msg"><div class="meta">${esc(r.rater)} · ${r.score}/5</div><div class="body">${esc(r.feedback)}</div></div>`).join("") : `<div class="muted">noch keine</div>`}
+  </div>`;
+  icons();
+  let score = 0;
+  const stars = document.getElementById("stars");
+  stars.onmousemove = e => { const i = Math.ceil(((e.offsetX) / stars.offsetWidth) * 5); stars.textContent = "★★★★★☆☆☆☆☆".slice(5 - i, 10 - i); };
+  stars.onclick = e => { score = Math.ceil(((e.offsetX) / stars.offsetWidth) * 5); };
+  document.getElementById("rate-send").onclick = async () => {
+    if (!score) score = 3;
+    await api.post("/api/ratings", { agent_id: id, score, feedback: document.getElementById("rate-fb").value });
+    openAgent(id);
+  };
+};
+
+// ---------- Tasks ----------
+async function renderTasks() {
+  const tasks = await api.get("/api/tasks");
+  const groups = { todo: [], in_progress: [], done: [], failed: [] };
+  tasks.forEach(t => (groups[t.status] || (groups[t.status] = [])).push(t));
+  const labels = { todo: "Offen", in_progress: "In Arbeit", done: "Erledigt", failed: "Fehlgeschlagen" };
+  root.innerHTML = Object.keys(labels).map(k => `
+    <div class="panel">
+      <div class="panel-head"><i data-lucide="circle-dot"></i> <b>${labels[k]}</b> <span class="tag">${(groups[k] || []).length}</span><i data-lucide="chevron-down" class="chev"></i></div>
+      <div class="panel-body">${(groups[k] || []).length ? (groups[k]).map(t => `<div class="msg"><div class="subject">#${t.id} ${esc(t.title)}</div><div class="body">${esc(t.description)}</div>${t.result ? `<div class="tag" style="margin-top:6px">Ergebnis</div><div class="body">${esc(t.result)}</div>` : ""}</div>`).join("") : `<div class="muted">keine</div>`}</div>
+    </div>`).join("");
+  icons(); setupCollapse();
+}
+
+// ---------- Approvals ----------
+async function renderApprovals() {
+  const items = await api.get("/api/approvals");
+  root.innerHTML = `<div class="card"><h3><i data-lucide="shield-check"></i> Wartende Freigaben</h3>
+    ${items.length ? items.map(a => `<div class="agent-row"><div class="info"><b>${esc(a.summary)}</b><small>${esc(JSON.stringify(a.action))}</small></div>
+      <button class="btn green sm" onclick="decide(${a.id},'approve')"><i data-lucide="check"></i> Freigeben</button>
+      <button class="btn red sm" onclick="decide(${a.id},'reject')"><i data-lucide="x"></i> Ablehnen</button></div>`).join("") : `<div class="empty">Keine offenen Freigaben.</div>`}</div>`;
+  icons();
+}
+window.decide = async (id, d) => { await api.post(`/api/approvals/${id}/${d}`); renderApprovals(); refreshBadges(); };
+
+// ---------- Activity ----------
+async function renderActivity() {
+  const evs = await api.get("/api/events");
+  const ic = { hire: "user-plus", fire: "user-minus", resign: "door-open", task: "list-checks", rating: "star", message: "mail", error: "alert-triangle", info: "info" };
+  root.innerHTML = `<div class="card"><h3><i data-lucide="activity"></i> Aktivitäts-Log</h3>
+    ${evs.length ? evs.map(e => `<div class="agent-row"><div class="avatar" style="background:var(--panel-2);color:var(--text-dim)"><i data-lucide="${ic[e.kind] || "circle"}"></i></div>
+      <div class="info"><b>${esc(e.text)}</b><small>${e.agent ? esc(e.agent) + " · " : ""}${new Date(e.created_at).toLocaleString("de-DE")}</small></div></div>`).join("") : `<div class="empty">Noch keine Aktivität.</div>`}</div>`;
+  icons();
+}
+
+// ---------- Settings ----------
+async function renderSettings() {
+  const s = await api.get("/api/settings");
+  const provOpts = (sel) => ["claude", "openai", "ollama"].map(p => `<option ${sel === p ? "selected" : ""} value="${p}">${p}${s.providers_available[p] ? "" : " (kein Key → Mock)"}</option>`).join("");
+  const autoOpts = { full: "Voll autonom (keine Rückfragen)", ask_for_hiring: "Nachfragen bei Einstellung/Kündigung", ask_for_everything: "Bei allem Wichtigen nachfragen" };
+  root.innerHTML = `
+    <div class="grid cols-2">
+      <div class="card"><h3><i data-lucide="sliders"></i> Autonomie & Freigaben</h3>
+        <label>Autonomie-Stufe</label>
+        <select id="s-autonomy">${Object.keys(autoOpts).map(k => `<option value="${k}" ${s.autonomy_level === k ? "selected" : ""}>${autoOpts[k]}</option>`).join("")}</select>
+        <div class="row"><div class="toggle" id="s-run"><div class="switch ${s.auto_run ? "on" : ""}"></div> Agenten laufen automatisch</div></div>
+        <div class="row" style="margin-top:10px"><div class="toggle" id="s-hire"><div class="switch ${s.require_approval_hire ? "on" : ""}"></div> Einstellung freigeben</div></div>
+        <div class="row" style="margin-top:10px"><div class="toggle" id="s-fire"><div class="switch ${s.require_approval_fire ? "on" : ""}"></div> Kündigung freigeben</div></div>
+        <label style="margin-top:12px">Kündigungsschwelle (Ø Bewertung)</label>
+        <input id="s-thresh" type="number" min="1" max="5" step="0.5" value="${s.fire_threshold}" />
+      </div>
+      <div class="card"><h3><i data-lucide="cpu"></i> Modelle pro Rolle</h3>
+        <label>Chef – Provider</label><select id="s-cp">${provOpts(s.default_chef_provider)}</select>
+        <label>Chef – Modell</label><input id="s-cm" value="${esc(s.default_chef_model)}" />
+        <label>Mitarbeiter – Provider</label><select id="s-wp">${provOpts(s.default_worker_provider)}</select>
+        <label>Mitarbeiter – Modell</label><input id="s-wm" value="${esc(s.default_worker_model)}" />
+        <label>Erlaubte Provider (CSV)</label><input id="s-allowed" value="${esc(s.allowed_providers)}" />
+      </div>
+    </div>
+    <div style="margin-top:14px"><button class="btn" id="s-save"><i data-lucide="save"></i> Einstellungen speichern</button>
+      <span class="muted" id="s-status" style="margin-left:10px"></span></div>
+    <div class="card" style="margin-top:16px"><h3><i data-lucide="plug"></i> Provider-Status</h3>
+      ${Object.entries(s.providers_available).map(([k, v]) => `<span class="pill ${v ? "employed" : "resigned"}" style="margin-right:8px">${k}: ${v ? "verfügbar" : "Mock"}</span>`).join("")}
+    </div>`;
+  icons();
+  const toggles = {};
+  ["s-run", "s-hire", "s-fire"].forEach(id => {
+    const el = document.getElementById(id);
+    toggles[id] = el.querySelector(".switch").classList.contains("on");
+    el.onclick = () => { const sw = el.querySelector(".switch"); sw.classList.toggle("on"); toggles[id] = sw.classList.contains("on"); };
+  });
+  document.getElementById("s-save").onclick = async () => {
+    await api.put("/api/settings", {
+      autonomy_level: document.getElementById("s-autonomy").value,
+      auto_run: toggles["s-run"], require_approval_hire: toggles["s-hire"], require_approval_fire: toggles["s-fire"],
+      fire_threshold: parseFloat(document.getElementById("s-thresh").value),
+      default_chef_provider: document.getElementById("s-cp").value, default_chef_model: document.getElementById("s-cm").value,
+      default_worker_provider: document.getElementById("s-wp").value, default_worker_model: document.getElementById("s-wm").value,
+      allowed_providers: document.getElementById("s-allowed").value,
+    });
+    document.getElementById("s-status").textContent = "✓ gespeichert";
+  };
+}
+
+// ---------- Helpers ----------
+function setupCollapse() {
+  document.querySelectorAll(".panel-head").forEach(h => h.onclick = () => h.parentElement.classList.toggle("collapsed"));
+}
+
+async function refreshBadges() {
+  try {
+    const s = await api.get("/api/state");
+    const bi = document.getElementById("badge-inbox");
+    const ba = document.getElementById("badge-approvals");
+    bi.textContent = s.open_questions; bi.classList.toggle("hidden", !s.open_questions);
+    ba.textContent = s.pending_approvals; ba.classList.toggle("hidden", !s.pending_approvals);
+    const run = await api.get("/api/settings");
+    document.getElementById("run-dot").style.background = run.auto_run ? "var(--green)" : "var(--text-dim)";
+    document.getElementById("run-label").textContent = run.auto_run ? "läuft" : "pausiert";
+  } catch (e) { /* still */ }
+}
+
+// Initial + Polling
+render();
+refreshBadges();
+setInterval(() => {
+  refreshBadges();
+  if (currentView === "inbox") loadThread();
+  else if (["activity", "approvals", "tasks", "org"].includes(currentView)) render();
+}, 5000);

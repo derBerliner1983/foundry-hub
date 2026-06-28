@@ -1,0 +1,41 @@
+"""Zentrale Konfiguration aus Umgebungsvariablen."""
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+def _bool(name: str, default: bool = False) -> bool:
+    return os.getenv(name, str(default)).lower() in ("1", "true", "yes", "on")
+
+
+class Config:
+    # Persistenz
+    DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:////data/aihub.db")
+
+    # API-Keys (Cloud-Provider). Leer = Provider nicht nutzbar -> Mock greift.
+    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
+    # Endpunkte
+    ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+    OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com")
+    OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+
+    # Standardmodelle
+    DEFAULT_CHEF_PROVIDER = os.getenv("DEFAULT_CHEF_PROVIDER", "claude")
+    DEFAULT_CHEF_MODEL = os.getenv("DEFAULT_CHEF_MODEL", "claude-opus-4-8")
+    DEFAULT_WORKER_PROVIDER = os.getenv("DEFAULT_WORKER_PROVIDER", "claude")
+    DEFAULT_WORKER_MODEL = os.getenv("DEFAULT_WORKER_MODEL", "claude-sonnet-4-6")
+
+    # Orchestrator
+    TICK_INTERVAL_SECONDS = float(os.getenv("TICK_INTERVAL_SECONDS", "4"))
+    MAX_AGENTS = int(os.getenv("MAX_AGENTS", "25"))
+    AUTO_RUN_DEFAULT = _bool("AUTO_RUN_DEFAULT", True)
+
+    # Wenn kein passender Key vorhanden ist, antwortet ein Mock-Provider,
+    # damit das System auch ohne Cloud-Zugang vorgeführt werden kann.
+    ALLOW_MOCK_FALLBACK = _bool("ALLOW_MOCK_FALLBACK", True)
+
+
+config = Config()
