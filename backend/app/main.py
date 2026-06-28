@@ -17,11 +17,14 @@ from .database import Base, SessionLocal, engine
 from .models import (
     Agent,
     Event,
+    McpServer,
     Message,
     PendingApproval,
     Project,
     Rating,
+    Rule,
     Settings,
+    Skill,
     Task,
 )
 from .roles import ROLES, role_title
@@ -109,6 +112,37 @@ def msg_dict(db, m: Message):
 class NewRequest(BaseModel):
     title: str
     description: str = ""
+
+
+class QuickTask(BaseModel):
+    title: str
+    description: str = ""
+
+
+class RuleIn(BaseModel):
+    title: str | None = None
+    content: str | None = None
+    scope: str | None = None
+    role: str | None = None
+    project_id: int | None = None
+    active: bool | None = None
+
+
+class SkillIn(BaseModel):
+    name: str
+    description: str = ""
+    instructions: str = ""
+    command: str = ""
+    enabled: bool | None = None
+
+
+class McpIn(BaseModel):
+    name: str
+    description: str = ""
+    transport: str = "stdio"
+    command: str = ""
+    url: str = ""
+    enabled: bool | None = None
 
 
 class UserMessage(BaseModel):
@@ -438,6 +472,205 @@ async def ollama_unload(m: OllamaModel):
 @app.post("/api/ollama/delete")
 async def ollama_delete(m: OllamaModel):
     return await ollama_admin.delete(m.name)
+
+
+# --------------------------------------------------------------------------- #
+# Projekte & Einzelaufgaben
+# --------------------------------------------------------------------------- #
+@app.post("/api/projects")
+def create_project(req: NewRequest):
+    """Legt ein Projekt an und beauftragt den Chef damit."""
+    db = SessionLocal()
+    try:
+        chef = ensure_seed(db)
+        project = Project(title=req.title, description=req.description)
+        db.add(project)
+        db.flush()
+        orch.send_message(db, sender_kind="user", sender_agent_id=None,
+                          recipient_kind="agent", recipient_agent_id=chef.id,
+                          subject="Neues Projekt: " + req.title,
+                          body=req.description or req.title, project_id=project.id)
+        db.commit()
+        return {"project_id": project.id}
+    finally:
+        db.close()
+
+
+@app.post("/api/quicktasks")
+def create_quicktask(req: QuickTask):
+    """Einzelaufgabe (kein Projekt) direkt an die Firma/den Chef."""
+    db = SessionLocal()
+    try:
+        chef = ensure_seed(db)
+        orch.send_message(db, sender_kind="user", sender_agent_id=None,
+                          recipient_kind="agent", recipient_agent_id=chef.id,
+                          subject="Einzelaufgabe: " + req.title,
+                          body=(req.description or req.title) +
+                          "\n\n(Hinweis: Einzelaufgabe – kein volles Projekt nötig. "
+                          "Erledige es selbst oder delegiere es schlank.)",
+                          project_id=None)
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+# --------------------------------------------------------------------------- #
+# Cookbook / Regelwerk
+# --------------------------------------------------------------------------- #
+def _rule_dict(r: Rule):
+    return {"id": r.id, "title": r.title, "content": r.content, "scope": r.scope,
+            "role": r.role, "project_id": r.project_id, "source": r.source,
+            "active": r.active}
+
+
+@app.get("/api/rules")
+def list_rules():
+    db = SessionLocal()
+    try:
+        return [_rule_dict(r) for r in db.query(Rule).order_by(Rule.id.desc()).all()]
+    finally:
+        db.close()
+
+
+@app.post("/api/rules")
+def create_rule(r: RuleIn):
+    db = SessionLocal()
+    try:
+        rule = Rule(title=r.title or "Regel", content=r.content or "",
+                    scope=r.scope or "global", role=r.role,
+                    project_id=r.project_id, source="user",
+                    active=True if r.active is None else r.active)
+        db.add(rule)
+        db.commit()
+        return _rule_dict(rule)
+    finally:
+        db.close()
+
+
+@app.put("/api/rules/{rule_id}")
+def update_rule(rule_id: int, r: RuleIn):
+    db = SessionLocal()
+    try:
+        rule = db.get(Rule, rule_id)
+        if not rule:
+            raise HTTPException(404, "Regel nicht gefunden")
+        for f, v in r.model_dump(exclude_none=True).items():
+            setattr(rule, f, v)
+        db.commit()
+        return _rule_dict(rule)
+    finally:
+        db.close()
+
+
+@app.delete("/api/rules/{rule_id}")
+def delete_rule(rule_id: int):
+    db = SessionLocal()
+    try:
+        rule = db.get(Rule, rule_id)
+        if rule:
+            db.delete(rule)
+            db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+# --------------------------------------------------------------------------- #
+# Skills & MCP-Registry
+# --------------------------------------------------------------------------- #
+def _skill_dict(s: Skill):
+    return {"id": s.id, "name": s.name, "description": s.description,
+            "instructions": s.instructions, "command": s.command, "enabled": s.enabled}
+
+
+@app.get("/api/skills")
+def list_skills():
+    db = SessionLocal()
+    try:
+        return [_skill_dict(s) for s in db.query(Skill).order_by(Skill.id).all()]
+    finally:
+        db.close()
+
+
+@app.post("/api/skills")
+def create_skill(s: SkillIn):
+    db = SessionLocal()
+    try:
+        existing = db.query(Skill).filter(Skill.name == s.name).first()
+        if existing:
+            for f, v in s.model_dump(exclude_none=True).items():
+                setattr(existing, f, v)
+            db.commit()
+            return _skill_dict(existing)
+        skill = Skill(name=s.name, description=s.description, instructions=s.instructions,
+                      command=s.command, enabled=True if s.enabled is None else s.enabled)
+        db.add(skill)
+        db.commit()
+        return _skill_dict(skill)
+    finally:
+        db.close()
+
+
+@app.delete("/api/skills/{skill_id}")
+def delete_skill(skill_id: int):
+    db = SessionLocal()
+    try:
+        s = db.get(Skill, skill_id)
+        if s:
+            db.delete(s)
+            db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+def _mcp_dict(m: McpServer):
+    return {"id": m.id, "name": m.name, "description": m.description,
+            "transport": m.transport, "command": m.command, "url": m.url,
+            "enabled": m.enabled}
+
+
+@app.get("/api/mcp")
+def list_mcp():
+    db = SessionLocal()
+    try:
+        return [_mcp_dict(m) for m in db.query(McpServer).order_by(McpServer.id).all()]
+    finally:
+        db.close()
+
+
+@app.post("/api/mcp")
+def create_mcp(m: McpIn):
+    db = SessionLocal()
+    try:
+        existing = db.query(McpServer).filter(McpServer.name == m.name).first()
+        if existing:
+            for f, v in m.model_dump(exclude_none=True).items():
+                setattr(existing, f, v)
+            db.commit()
+            return _mcp_dict(existing)
+        srv = McpServer(name=m.name, description=m.description, transport=m.transport,
+                        command=m.command, url=m.url,
+                        enabled=True if m.enabled is None else m.enabled)
+        db.add(srv)
+        db.commit()
+        return _mcp_dict(srv)
+    finally:
+        db.close()
+
+
+@app.delete("/api/mcp/{mcp_id}")
+def delete_mcp(mcp_id: int):
+    db = SessionLocal()
+    try:
+        m = db.get(McpServer, mcp_id)
+        if m:
+            db.delete(m)
+            db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
 
 
 # --------------------------------------------------------------------------- #

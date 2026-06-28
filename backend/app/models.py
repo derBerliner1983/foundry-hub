@@ -131,6 +131,50 @@ class PendingApproval(Base):
     created_at = Column(DateTime, default=now)
 
 
+class Rule(Base):
+    """Cookbook/Regelwerk: Standards & Vorgaben, die in die Agenten-Prompts
+    eingespeist werden. Vom Nutzer ODER von Agenten erstellbar."""
+    __tablename__ = "rules"
+
+    id = Column(Integer, primary_key=True)
+    title = Column(String, nullable=False)
+    content = Column(Text, default="")
+    scope = Column(String, default="global")  # global | role | project
+    role = Column(String, nullable=True)       # bei scope=role
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)  # bei scope=project
+    source = Column(String, default="user")    # user | agent
+    created_by_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=now)
+
+
+class Skill(Base):
+    """Wiederverwendbare Fähigkeit: Anweisungs-/Befehlsvorlage, die Agenten nutzen können."""
+    __tablename__ = "skills"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False, unique=True)
+    description = Column(String, default="")
+    instructions = Column(Text, default="")     # Prompt-/Vorgehensvorlage
+    command = Column(Text, default="")          # optionaler Shell-Befehl ({args} wird ersetzt)
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=now)
+
+
+class McpServer(Base):
+    """Registry-Eintrag für einen externen MCP-Server (leichtgewichtig)."""
+    __tablename__ = "mcp_servers"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False, unique=True)
+    description = Column(String, default="")
+    transport = Column(String, default="stdio")  # stdio | http
+    command = Column(String, default="")          # bei stdio
+    url = Column(String, default="")              # bei http
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=now)
+
+
 class Event(Base):
     """Aktivitäts-Log für die Timeline."""
     __tablename__ = "events"

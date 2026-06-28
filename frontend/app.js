@@ -12,7 +12,7 @@ let selectedAgent = null; // null = Chef-Inbox (an Nutzer)
 
 const root = document.getElementById("view-root");
 const titleEl = document.getElementById("view-title");
-const TITLES = { inbox: "Inbox", org: "Team / Organisation", tasks: "Aufgaben", workshop: "Werkstatt", approvals: "Freigaben", activity: "Aktivität", settings: "Einstellungen" };
+const TITLES = { inbox: "Inbox", projects: "Projekte", org: "Team / Organisation", tasks: "Aufgaben", workshop: "Werkstatt", cookbook: "Cookbook / Regelwerk", skills: "Skills & MCP", approvals: "Freigaben", activity: "Aktivität", settings: "Einstellungen" };
 let wsProject = null;
 
 function icons() { window.lucide && lucide.createIcons(); }
@@ -48,9 +48,12 @@ document.getElementById("theme-toggle").addEventListener("click", () => {
 // ---------- Render-Dispatcher ----------
 async function render() {
   if (currentView === "inbox") return renderInbox();
+  if (currentView === "projects") return renderProjects();
   if (currentView === "org") return renderOrg();
   if (currentView === "tasks") return renderTasks();
   if (currentView === "workshop") return renderWorkshop();
+  if (currentView === "cookbook") return renderCookbook();
+  if (currentView === "skills") return renderSkills();
   if (currentView === "approvals") return renderApprovals();
   if (currentView === "activity") return renderActivity();
   if (currentView === "settings") return renderSettings();
@@ -69,6 +72,8 @@ async function renderInbox() {
     <div class="grid cols-2" style="margin-bottom:16px">
       <div class="card">
         <h3><i data-lucide="send"></i> Neue Anfrage an den Chef</h3>
+        <label>Art</label>
+        <select id="req-type"><option value="project">Projekt (eigenes Team)</option><option value="quick">Einzelaufgabe (kein Projekt)</option></select>
         <input id="req-title" placeholder="Was möchtest du? (Titel)" />
         <textarea id="req-desc" placeholder="Beschreibe Wunsch, Ziel, Termin/Frist, Details …"></textarea>
         <button class="btn" id="req-send"><i data-lucide="rocket"></i> Auftrag senden</button>
@@ -91,7 +96,9 @@ async function renderInbox() {
   document.getElementById("req-send").onclick = async () => {
     const title = document.getElementById("req-title").value.trim();
     if (!title) return;
-    await api.post("/api/requests", { title, description: document.getElementById("req-desc").value });
+    const desc = document.getElementById("req-desc").value;
+    const type = document.getElementById("req-type").value;
+    await api.post(type === "quick" ? "/api/quicktasks" : "/api/projects", { title, description: desc });
     document.getElementById("req-title").value = ""; document.getElementById("req-desc").value = "";
     selectedAgent = ""; loadThread();
   };
@@ -245,6 +252,127 @@ window.viewFile = async function (p) {
   const r = await api.get(`/api/workspace/file?project_id=${wsProject}&path=${p}`);
   document.getElementById("ws-view").textContent = r.content || "(leer)";
 };
+
+// ---------- Projekte ----------
+async function renderProjects() {
+  const [projects, agents] = await Promise.all([api.get("/api/projects"), api.get("/api/state")]);
+  const teamCount = pid => agents.agents.filter(a => a.project_id === pid && a.status === "employed").length;
+  root.innerHTML = `
+    <div class="card" style="margin-bottom:14px">
+      <h3><i data-lucide="folder-plus"></i> Neues Projekt</h3>
+      <input id="np-title" placeholder="Projekttitel"/>
+      <textarea id="np-desc" placeholder="Ziel, Umfang, Frist …"></textarea>
+      <button class="btn" id="np-send"><i data-lucide="rocket"></i> Projekt starten</button>
+    </div>
+    <div class="card"><h3><i data-lucide="folder-kanban"></i> Laufende Projekte</h3>
+      ${projects.length ? projects.map(p => `<div class="agent-row">
+        <div class="avatar role-project_manager"><i data-lucide="folder"></i></div>
+        <div class="info"><b>#${p.id} ${esc(p.title)}</b><small>${teamCount(p.id)} Mitarbeiter · Status ${esc(p.status)}</small></div>
+        <button class="btn ghost sm" onclick="gotoWorkshop(${p.id})"><i data-lucide="folder-code"></i> Werkstatt</button>
+      </div>`).join("") : `<div class="empty">Noch keine Projekte. Starte oben eins.</div>`}
+    </div>`;
+  icons();
+  document.getElementById("np-send").onclick = async () => {
+    const t = document.getElementById("np-title").value.trim(); if (!t) return;
+    await api.post("/api/projects", { title: t, description: document.getElementById("np-desc").value });
+    renderProjects();
+  };
+}
+window.gotoWorkshop = (pid) => {
+  wsProject = pid;
+  document.querySelector('.nav-item[data-view="workshop"]').click();
+};
+
+// ---------- Cookbook / Regelwerk ----------
+async function renderCookbook() {
+  const rules = await api.get("/api/rules");
+  const scopeLabel = { global: "Global", role: "Rolle", project: "Projekt" };
+  root.innerHTML = `
+    <div class="card" style="margin-bottom:14px">
+      <h3><i data-lucide="book-plus"></i> Neue Regel / Standard</h3>
+      <input id="cb-title" placeholder="Titel (z. B. Code-Stil, Designsprache, Lieferformat)"/>
+      <textarea id="cb-content" placeholder="Die Regel: Wie muss etwas aussehen? Welche Standards gelten?"></textarea>
+      <div class="row"><select id="cb-scope" style="margin:0">
+        <option value="global">Global (für alle)</option>
+        <option value="role">Pro Rolle</option>
+        <option value="project">Pro Projekt</option></select>
+        <input id="cb-role" placeholder="Rolle (z. B. developer)" style="margin:0"/>
+        <button class="btn" id="cb-add" style="white-space:nowrap"><i data-lucide="plus"></i> Anlegen</button></div>
+    </div>
+    <div class="card"><h3><i data-lucide="book-open"></i> Regelwerk</h3>
+      ${rules.length ? rules.map(r => `<div class="msg ${r.active ? '' : 'needs-answer'}">
+        <div class="meta"><span class="tag">${scopeLabel[r.scope] || r.scope}${r.role ? ': ' + esc(r.role) : ''}</span>
+          <span class="tag">${r.source === 'agent' ? '🤖 KI' : '👤 Du'}</span>
+          <span class="spacer" style="flex:1"></span>
+          <span class="toggle" onclick="toggleRule(${r.id},${!r.active})"><div class="switch ${r.active ? 'on' : ''}"></div></span>
+          <button class="btn red sm" onclick="delRule(${r.id})"><i data-lucide="trash-2"></i></button></div>
+        <div class="subject">${esc(r.title)}</div><div class="body">${esc(r.content)}</div></div>`).join("")
+      : `<div class="empty">Noch keine Regeln. Lege Standards an – Agenten halten sich daran.</div>`}
+    </div>`;
+  icons();
+  document.getElementById("cb-add").onclick = async () => {
+    const title = document.getElementById("cb-title").value.trim(); if (!title) return;
+    await api.post("/api/rules", {
+      title, content: document.getElementById("cb-content").value,
+      scope: document.getElementById("cb-scope").value,
+      role: document.getElementById("cb-role").value.trim() || null,
+    });
+    renderCookbook();
+  };
+}
+window.toggleRule = async (id, active) => { await api.put("/api/rules/" + id, { active }); renderCookbook(); };
+window.delRule = async (id) => { await fetch("/api/rules/" + id, { method: "DELETE" }); renderCookbook(); };
+
+// ---------- Skills & MCP ----------
+async function renderSkills() {
+  const [skills, mcp] = await Promise.all([api.get("/api/skills"), api.get("/api/mcp")]);
+  root.innerHTML = `
+    <div class="grid cols-2">
+      <div class="card"><h3><i data-lucide="puzzle"></i> Skills</h3>
+        ${skills.length ? skills.map(s => `<div class="agent-row">
+          <div class="avatar role-developer"><i data-lucide="zap"></i></div>
+          <div class="info"><b>${esc(s.name)}</b><small>${esc(s.description)}${s.command ? ' · ⚙️ Befehl' : ''}</small></div>
+          <span class="pill ${s.enabled ? 'employed' : 'resigned'}">${s.enabled ? 'aktiv' : 'aus'}</span>
+          <button class="btn red sm" onclick="delSkill(${s.id})"><i data-lucide="trash-2"></i></button></div>`).join("") : `<div class="muted">keine</div>`}
+        <hr style="border-color:var(--border);margin:12px 0"/>
+        <input id="sk-name" placeholder="Skill-Name (z. B. unit_tests)"/>
+        <input id="sk-desc" placeholder="Kurzbeschreibung"/>
+        <textarea id="sk-instr" placeholder="Anweisung/Vorgehen (Prompt-Vorlage)"></textarea>
+        <input id="sk-cmd" placeholder="Optionaler Befehl, {args} wird ersetzt (z. B. pytest {args})"/>
+        <button class="btn" id="sk-add"><i data-lucide="plus"></i> Skill speichern</button>
+      </div>
+      <div class="card"><h3><i data-lucide="server"></i> MCP-Server (Registry)</h3>
+        ${mcp.length ? mcp.map(m => `<div class="agent-row">
+          <div class="avatar role-planner"><i data-lucide="plug"></i></div>
+          <div class="info"><b>${esc(m.name)}</b><small>${esc(m.transport)} · ${esc(m.description)}</small></div>
+          <span class="pill ${m.enabled ? 'employed' : 'resigned'}">${m.enabled ? 'aktiv' : 'aus'}</span>
+          <button class="btn red sm" onclick="delMcp(${m.id})"><i data-lucide="trash-2"></i></button></div>`).join("") : `<div class="muted">keine</div>`}
+        <hr style="border-color:var(--border);margin:12px 0"/>
+        <input id="mc-name" placeholder="Name (z. B. github)"/>
+        <input id="mc-desc" placeholder="Beschreibung / Zweck"/>
+        <div class="row"><select id="mc-transport" style="margin:0"><option value="stdio">stdio</option><option value="http">http</option></select>
+          <input id="mc-target" placeholder="Befehl oder URL" style="margin:0"/></div>
+        <button class="btn" id="mc-add"><i data-lucide="plus"></i> MCP-Server speichern</button>
+        <div class="tag" style="margin-top:8px">Leichtgewichtig: Agenten kennen diese Werkzeuge und können sie anfragen.</div>
+      </div>
+    </div>`;
+  icons();
+  document.getElementById("sk-add").onclick = async () => {
+    const name = document.getElementById("sk-name").value.trim(); if (!name) return;
+    await api.post("/api/skills", { name, description: document.getElementById("sk-desc").value,
+      instructions: document.getElementById("sk-instr").value, command: document.getElementById("sk-cmd").value });
+    renderSkills();
+  };
+  document.getElementById("mc-add").onclick = async () => {
+    const name = document.getElementById("mc-name").value.trim(); if (!name) return;
+    const tr = document.getElementById("mc-transport").value, tgt = document.getElementById("mc-target").value;
+    await api.post("/api/mcp", { name, description: document.getElementById("mc-desc").value,
+      transport: tr, command: tr === "stdio" ? tgt : "", url: tr === "http" ? tgt : "" });
+    renderSkills();
+  };
+}
+window.delSkill = async (id) => { await fetch("/api/skills/" + id, { method: "DELETE" }); renderSkills(); };
+window.delMcp = async (id) => { await fetch("/api/mcp/" + id, { method: "DELETE" }); renderSkills(); };
 
 // ---------- Approvals ----------
 async function renderApprovals() {

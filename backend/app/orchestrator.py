@@ -10,10 +10,13 @@ from .config import config
 from .models import (
     Agent,
     Event,
+    McpServer,
     Message,
     PendingApproval,
     Rating,
+    Rule,
     Settings,
+    Skill,
     Task,
 )
 from .prompts import build_system_prompt
@@ -59,6 +62,28 @@ def send_message(db, *, sender_kind, sender_agent_id, recipient_kind,
 def avg_rating(db, agent_id):
     val = db.query(func.avg(Rating.score)).filter(Rating.ratee_agent_id == agent_id).scalar()
     return round(val, 2) if val is not None else None
+
+
+def rules_for(db, agent: Agent, project_ctx) -> str:
+    """Aktive Regeln, die für diesen Agenten gelten (global + Rolle + Projekt)."""
+    rules = db.query(Rule).filter(Rule.active == True).all()  # noqa: E712
+    out = []
+    for r in rules:
+        if r.scope == "global" \
+           or (r.scope == "role" and r.role == agent.role) \
+           or (r.scope == "project" and r.project_id == project_ctx):
+            out.append(f"  • [{r.title}] {r.content}")
+    return "\n".join(out)
+
+
+def skills_text(db) -> str:
+    skills = db.query(Skill).filter(Skill.enabled == True).all()  # noqa: E712
+    return "\n".join(f"  • {s.name}: {s.description}" for s in skills)
+
+
+def mcp_text(db) -> str:
+    servers = db.query(McpServer).filter(McpServer.enabled == True).all()  # noqa: E712
+    return "\n".join(f"  • {m.name} ({m.transport}): {m.description}" for m in servers)
 
 
 def team_summary(db, viewer: Agent) -> str:
@@ -107,9 +132,12 @@ def _resolve_model(settings, role, provider, model):
     return provider, model
 
 
-def execute_actions(db, agent: Agent, settings: Settings, parsed: dict, current_task: Task):
+def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
+                    current_task: Task, project_ctx=None):
     actions = parsed.get("actions", [])[:MAX_ACTIONS_PER_TURN]
     last_hired_id = None
+    # Projektkontext: Projekt der ausgelösten Nachricht/Aufgabe, sonst eigenes Projekt
+    pctx = project_ctx if project_ctx is not None else agent.project_id
 
     for act in actions:
         atype = act.get("type")
@@ -132,7 +160,7 @@ def execute_actions(db, agent: Agent, settings: Settings, parsed: dict, current_
 
         # ---------- Einstellen ----------
         elif atype == "hire":
-            new_id = _do_hire(db, agent, settings, act)
+            new_id = _do_hire(db, agent, settings, act, pctx)
             if new_id:
                 last_hired_id = new_id
 
@@ -168,7 +196,7 @@ def execute_actions(db, agent: Agent, settings: Settings, parsed: dict, current_
                           .filter(Agent.manager_id == agent.id, Agent.status == "employed")
                           .order_by(Agent.id.desc()).first())
                 assign = newest.id if newest else None
-            t = Task(project_id=agent.project_id, title=act.get("title", "Aufgabe"),
+            t = Task(project_id=pctx, title=act.get("title", "Aufgabe"),
                      description=act.get("description", ""), assigned_agent_id=assign,
                      created_by_agent_id=agent.id, status="todo")
             db.add(t)
@@ -177,7 +205,7 @@ def execute_actions(db, agent: Agent, settings: Settings, parsed: dict, current_
                 send_message(db, sender_kind="agent", sender_agent_id=agent.id,
                              recipient_kind="agent", recipient_agent_id=assign,
                              subject="Neue Aufgabe: " + t.title,
-                             body=t.description, project_id=agent.project_id)
+                             body=t.description, project_id=pctx)
 
         elif atype == "complete_task":
             tid = act.get("task_id")
@@ -208,28 +236,63 @@ def execute_actions(db, agent: Agent, settings: Settings, parsed: dict, current_
                 log(db, "error", "Datei schreiben gesperrt (Einstellungen)", agent_id=agent.id)
                 continue
             try:
-                rel = workspace.write_file(agent.project_id, act.get("path", "datei.txt"),
+                rel = workspace.write_file(pctx, act.get("path", "datei.txt"),
                                            act.get("content", ""))
                 log(db, "file", f"Datei geschrieben: {rel}", agent_id=agent.id)
             except Exception as e:  # noqa: BLE001
                 log(db, "error", f"Datei-Fehler: {e}", agent_id=agent.id)
 
         elif atype == "run_command":
-            _do_run_command(db, agent, settings, act, current_task)
+            _do_run_command(db, agent, settings, act, current_task, pctx)
 
         elif atype == "read_file":
-            content = workspace.read_file(agent.project_id, act.get("path", ""))
+            content = workspace.read_file(pctx, act.get("path", ""))
             log(db, "file", f"Datei gelesen: {act.get('path','')} ({len(content)} Z.)", agent_id=agent.id)
             # Inhalt dem Agenten als Systemnachricht zurückgeben
             send_message(db, sender_kind="system", sender_agent_id=None,
                          recipient_kind="agent", recipient_agent_id=agent.id,
                          subject=f"Inhalt {act.get('path','')}", body=content[:4000])
 
+        # ---------- Cookbook & Skills ----------
+        elif atype == "add_rule":
+            scope = act.get("scope", "global")
+            rule = Rule(title=act.get("title", "Regel"), content=act.get("content", ""),
+                        scope=scope if scope in ("global", "role", "project") else "global",
+                        role=agent.role if scope == "role" else None,
+                        project_id=pctx if scope == "project" else None,
+                        source="agent", created_by_agent_id=agent.id, active=True)
+            db.add(rule)
+            log(db, "rule", f"Neue Regel angelegt: {rule.title}", agent_id=agent.id)
+
+        elif atype == "use_skill":
+            _do_use_skill(db, agent, act, current_task, pctx)
+
     # Eingehende Aufgabe als in Bearbeitung markieren, falls nichts abgeschlossen
     db.commit()
 
 
-def _do_run_command(db, agent, settings, act, current_task):
+def _do_use_skill(db, agent, act, current_task, pctx):
+    name = act.get("name", "")
+    skill = db.query(Skill).filter(Skill.name == name, Skill.enabled == True).first()  # noqa: E712
+    if not skill:
+        log(db, "error", f"Skill '{name}' nicht gefunden", agent_id=agent.id)
+        return
+    log(db, "skill", f"Skill genutzt: {name}", agent_id=agent.id)
+    # Hat der Skill einen Befehl, wird er (mit {args}) im Workspace ausgeführt
+    if skill.command:
+        cmd = skill.command.replace("{args}", act.get("args", ""))
+        _do_run_command(db, agent, get_settings(db),
+                        {"cmd": cmd}, current_task, pctx)
+    else:
+        # Reine Anweisungs-Skill: Vorgehen dem Agenten zurückspielen
+        send_message(db, sender_kind="system", sender_agent_id=None,
+                     recipient_kind="agent", recipient_agent_id=agent.id,
+                     subject=f"Skill: {name}", body=skill.instructions[:3000])
+
+
+def _do_run_command(db, agent, settings, act, current_task, pctx=None):
+    if pctx is None:
+        pctx = agent.project_id
     if not settings.enable_code_exec:
         log(db, "error", "Befehlsausführung gesperrt (Einstellungen)", agent_id=agent.id)
         return
@@ -237,7 +300,7 @@ def _do_run_command(db, agent, settings, act, current_task):
         log(db, "error", f"Befehlslimit ({config.MAX_EXEC_PER_TASK}) erreicht", agent_id=agent.id)
         return
     cmd = act.get("cmd") or act.get("command") or ""
-    res = workspace.run_command(agent.project_id, cmd)
+    res = workspace.run_command(pctx, cmd)
     if current_task:
         current_task.exec_count = (current_task.exec_count or 0) + 1
     status = "ok" if res["ok"] else f"Fehler ({res['code']})"
@@ -248,7 +311,7 @@ def _do_run_command(db, agent, settings, act, current_task):
         send_message(db, sender_kind="system", sender_agent_id=None,
                      recipient_kind="agent", recipient_agent_id=agent.id,
                      subject=f"Befehlsergebnis ({status})",
-                     body=f"$ {cmd}\n{out}", project_id=agent.project_id)
+                     body=f"$ {cmd}\n{out}", project_id=pctx)
 
 
 def _resolve_recipient(agent, to):
@@ -268,7 +331,9 @@ def _as_int(v, default=None):
         return default
 
 
-def _do_hire(db, agent, settings, act):
+def _do_hire(db, agent, settings, act, pctx=None):
+    if pctx is None:
+        pctx = agent.project_id
     target_role = act.get("role", "")
     if not can_hire(agent.role, target_role):
         log(db, "error", f"{agent.name} darf Rolle '{target_role}' nicht einstellen", agent_id=agent.id)
@@ -287,7 +352,7 @@ def _do_hire(db, agent, settings, act):
             action_json=json.dumps({"type": "hire", "role": target_role,
                                     "name": act.get("name", role_title(target_role)),
                                     "provider": provider, "model": model,
-                                    "manager_id": agent.id, "project_id": agent.project_id}),
+                                    "manager_id": agent.id, "project_id": pctx}),
             requested_by_agent_id=agent.id,
             summary=f"{agent.name} möchte {role_title(target_role)} einstellen ({act.get('name','')})",
         )
@@ -301,7 +366,7 @@ def _do_hire(db, agent, settings, act):
         return None
 
     return _create_agent(db, target_role, act.get("name"), provider, model,
-                         agent.id, agent.project_id)
+                         agent.id, pctx)
 
 
 def _create_agent(db, role, name, provider, model, manager_id, project_id):
@@ -404,24 +469,32 @@ async def run_agent_turn(db, agent: Agent):
     )
 
     current_task = None
+    project_ctx = agent.project_id
     context_lines = []
     for m in msgs:
         sender = "Nutzer" if m.sender_kind == "user" else (
             f"#{m.sender_agent_id} " + (db.get(Agent, m.sender_agent_id).name if m.sender_agent_id else "")
         )
         context_lines.append(f"NACHRICHT von {sender}: [{m.subject}] {m.body}")
+        if m.project_id is not None:
+            project_ctx = m.project_id
         m.is_read = True
     for t in tasks:
         context_lines.append(f"OFFENE AUFGABE #{t.id}: [{t.title}] {t.description}")
         if t.status == "todo":
             t.status = "in_progress"
+        if t.project_id is not None:
+            project_ctx = t.project_id
         current_task = current_task or t
 
     if not context_lines:
         db.commit()
         return None
 
-    system = build_system_prompt(agent, settings, team_summary(db, agent))
+    system = build_system_prompt(agent, settings, team_summary(db, agent),
+                                 rules_text=rules_for(db, agent, project_ctx),
+                                 skills_text=skills_text(db),
+                                 mcp_text=mcp_text(db))
     user_msg = "Bearbeite das Folgende und antworte als JSON:\n\n" + "\n".join(context_lines)
 
     result = await providers.chat(agent.provider, agent.model, system,
@@ -432,7 +505,7 @@ async def run_agent_turn(db, agent: Agent):
         return None
 
     parsed = parse_actions(result.text)
-    execute_actions(db, agent, settings, parsed, current_task)
+    execute_actions(db, agent, settings, parsed, current_task, project_ctx)
     return {"agent": agent.name, "provider": result.provider,
             "thoughts": parsed.get("thoughts", ""), "actions": parsed.get("actions", [])}
 

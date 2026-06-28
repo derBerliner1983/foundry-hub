@@ -1,6 +1,6 @@
 """Initialdaten: Einstellungen + Chef-Agent."""
 from .config import config
-from .models import Agent, Settings
+from .models import Agent, Rule, Settings, Skill
 from .roles import role_title
 
 
@@ -32,5 +32,26 @@ def ensure_seed(db):
             manager_id=None,
         )
         db.add(chef)
+        db.commit()
+
+    # Beispiel-Skills
+    if db.query(Skill).count() == 0:
+        db.add_all([
+            Skill(name="python_script", description="Python-Skript schreiben und ausführen",
+                  instructions="Schreibe ein sauberes, getestetes Python-Skript. "
+                               "Lege es mit write_file an und führe es mit run_command aus.",
+                  command=""),
+            Skill(name="recherche", description="Strukturierte Kurzrecherche zu einem Thema",
+                  instructions="Fasse das Thema in Stichpunkten zusammen: Ziel, Optionen, "
+                               "Empfehlung, Risiken. Halte dich an Fakten.", command=""),
+        ])
+        db.commit()
+
+    # Beispiel-Regel im Cookbook
+    if db.query(Rule).count() == 0:
+        db.add(Rule(title="Lieferstandard",
+                    content="Jedes Ergebnis enthält: kurze Zusammenfassung, das eigentliche "
+                            "Resultat und einen klaren nächsten Schritt. Keine Floskeln.",
+                    scope="global", source="user", active=True))
         db.commit()
     return chef

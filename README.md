@@ -50,8 +50,13 @@ Dann im Browser: **http://localhost:8000**
 
 ## Oberfläche
 
-- **Inbox** – Aufträge senden, mit Chef **und** jedem Agenten chatten, offene
-  Rückfragen beantworten.
+- **Inbox** – Aufträge senden (**Projekt** oder **Einzelaufgabe**), mit Chef
+  **und** jedem Agenten chatten, offene Rückfragen beantworten.
+- **Projekte** – mehrere Projekte parallel anlegen/verwalten; jedes mit eigenem
+  Team, eigenen Aufgaben und eigenem Workspace.
+- **Cookbook** – Regelwerk/Standards (du **und** die KI können Regeln anlegen);
+  werden in die Agenten-Prompts eingespeist.
+- **Skills & MCP** – wiederverwendbare Skills und eine MCP-Server-Registry.
 - **Team / Org** – Organigramm mit Bewertungs-Donut, Status, Detailansicht +
   eigene Bewertung pro Agent.
 - **Aufgaben** – alle Arbeitspakete nach Status (offen / in Arbeit / erledigt).
@@ -94,6 +99,37 @@ Unter **Einstellungen → Lokale Modelle (Ollama)** kannst du:
 Beim Start zieht das System ein Standardmodell (`OLLAMA_AUTO_MODEL`) **nur dann**,
 wenn noch **gar kein** Modell installiert ist. Ist bereits eines vorhanden, wird
 nichts automatisch geladen.
+
+## Mehrere Projekte & Einzelaufgaben
+
+- **Projekt** – der Chef stellt eine Projektleitung ein, die ein eigenes Team
+  aufbaut. Jedes Projekt hat eigenen Workspace (`/data/workspace/project_<id>`),
+  eigene Aufgaben und eigene projektbezogene Regeln. Mehrere Projekte laufen
+  parallel; der Chef behält den Überblick.
+- **Einzelaufgabe** – kleine Aufträge, die *kein* volles Projekt brauchen
+  (z. B. „diesen Text korrigieren"). Gehen direkt an den Chef, der sie selbst
+  erledigt oder schlank delegiert.
+
+## Cookbook / Regelwerk (Standards)
+
+Im **Cookbook** legst du Regeln & Standards ab – „wie muss etwas aussehen":
+Designsprache, Code-Stil, Lieferformat usw. Geltungsbereich wählbar:
+
+- **Global** (für alle), **pro Rolle** (z. B. nur `developer`) oder **pro Projekt**.
+
+Regeln werden automatisch in die System-Prompts der betroffenen Agenten
+eingespeist. **Auch die KI legt Regeln an** (Aktion `add_rule`), wenn ihr
+auffällt, dass etwas immer wieder gleich gemacht wird. Du kannst jede Regel
+ansehen, bearbeiten, aktiv/inaktiv schalten oder löschen.
+
+## Skills & MCP (leichtgewichtig)
+
+- **Skills** – wiederverwendbare Fähigkeiten als Anweisungs-/Befehlsvorlage.
+  Agenten nutzen sie mit `use_skill`; hat ein Skill einen Befehl (`{args}` wird
+  ersetzt), wird er im Workspace ausgeführt, sonst dient er als Vorgehens-Vorlage.
+- **MCP-Registry** – externe MCP-Server eintragen (stdio/http). Agenten kennen
+  diese Werkzeuge und können sie in ihrer Planung berücksichtigen. (Voller
+  MCP-Client-Aufruf ist als nächster Ausbauschritt vorgesehen.)
 
 ## Architektur
 
