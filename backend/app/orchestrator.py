@@ -294,9 +294,11 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
             n = db.query(Milestone).filter(Milestone.project_id == pctx).count()
             ms = Milestone(project_id=pctx, title=act.get("title", "Meilenstein"),
                            description=act.get("description", ""), status="planned",
-                           order_index=n, created_by_agent_id=agent.id)
+                           order_index=n, created_by_agent_id=agent.id,
+                           due_date=parse_due(act.get("due_days"), act.get("due")))
             db.add(ms)
-            log(db, "milestone", f"Meilenstein geplant: {ms.title}", agent_id=agent.id)
+            frist = f" (Frist {ms.due_date.date()})" if ms.due_date else ""
+            log(db, "milestone", f"Meilenstein geplant: {ms.title}{frist}", agent_id=agent.id)
 
         elif atype == "complete_milestone":
             ms = _find_milestone(db, pctx, act)
@@ -318,6 +320,56 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
 def now():
     from datetime import datetime
     return datetime.utcnow()
+
+
+def parse_due(due_days=None, due=None):
+    """Wandelt due_days (Zahl) oder due (ISO-Datum 'YYYY-MM-DD') in ein Datum."""
+    import datetime
+    if due_days is not None:
+        try:
+            return datetime.datetime.utcnow() + datetime.timedelta(days=float(due_days))
+        except (ValueError, TypeError):
+            pass
+    if due:
+        for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%d.%m.%Y"):
+            try:
+                return datetime.datetime.strptime(str(due)[:19], fmt)
+            except ValueError:
+                continue
+    return None
+
+
+def check_overdue(db):
+    """Findet überfällige, nicht erledigte Meilensteine und meldet sie EINMAL
+    an den/die Verantwortliche(n), damit die KI reagieren kann."""
+    import datetime
+    now_ = datetime.datetime.utcnow()
+    overdue = (db.query(Milestone)
+               .filter(Milestone.due_date.isnot(None),
+                       Milestone.status != "done",
+                       Milestone.overdue_notified == False)  # noqa: E712
+               .all())
+    notified = 0
+    for ms in overdue:
+        if ms.due_date and ms.due_date < now_:
+            ms.overdue_notified = True
+            log(db, "deadline", f"⚠️ Meilenstein überfällig: {ms.title} (Frist {ms.due_date.date()})")
+            # An die Projektleitung des Projekts melden (sonst an den Chef)
+            pm = (db.query(Agent)
+                  .filter(Agent.project_id == ms.project_id, Agent.role == "project_manager",
+                          Agent.status == "employed").first())
+            target = pm or db.query(Agent).filter(Agent.role == "ceo").first()
+            if target:
+                send_message(db, sender_kind="system", sender_agent_id=None,
+                             recipient_kind="agent", recipient_agent_id=target.id,
+                             subject="⚠️ Frist überschritten: " + ms.title,
+                             body=f"Der Meilenstein '{ms.title}' ist seit {ms.due_date.date()} "
+                                  f"überfällig. Bitte priorisieren, Plan anpassen oder den Nutzer informieren.",
+                             project_id=ms.project_id)
+            notified += 1
+    if notified:
+        db.commit()
+    return notified
 
 
 def _refresh_milestone_status(db, milestone_id, agent_id=None):
@@ -688,6 +740,7 @@ async def tick(db, force=False):
     settings = get_settings(db)
     if not force and (not settings.auto_run or not within_schedule(settings)):
         return None
+    check_overdue(db)  # überfällige Meilensteine melden, bevor Agenten arbeiten
     agent = _next_agent_to_act(db)
     if not agent:
         return None

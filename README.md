@@ -159,6 +159,11 @@ wurde was gemacht":
   **Fortschrittsbalken** (erledigte / gesamte Aufgaben). Der Meilenstein-Status
   folgt **automatisch**: sobald Aufgaben anfallen → „läuft", sobald alle erledigt
   sind → „erledigt". Aufgaben ohne Meilenstein werden separat ausgewiesen.
+- **Fristen & Verzugs-Warnung** – Meilensteine können eine **Frist** haben
+  (`add_milestone` mit `due_days`, oder Datum in der UI). Die Ansicht warnt bei
+  **bald fälligen** (⏳) und **überfälligen** (⚠️, rot) Schritten. Bei Verzug
+  meldet das System dies **einmalig automatisch** an die Projektleitung (bzw. den
+  Chef), damit die KI priorisiert, den Plan anpasst oder dich informiert.
 - **Entscheidungs-Log** – für **jede** KI-Runde wird gespeichert: das **Warum**
   (Begründung des Agenten), das **Was/Wie** (durchgeführte Aktionen) und der
   **Auslöser**. So ist jederzeit nachvollziehbar, *warum* ein Agent etwas getan

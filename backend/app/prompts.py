@@ -29,7 +29,7 @@ Cookbook & Skills:
 - {"type":"mcp_call","server":"<servername>","tool":"<toolname>","arguments":{...}}  (echtes MCP-Tool aufrufen; Ergebnis kommt als Nachricht zurück)
 
 Roadmap / Zwischenschritte (vor allem Projektleiter):
-- {"type":"add_milestone","title":"...","description":"..."}        (geplanter Zwischenschritt)
+- {"type":"add_milestone","title":"...","description":"...","due_days":<Tage bis Frist>}  (geplanter Zwischenschritt; Frist optional, z. B. due_days:5)
 - {"type":"start_milestone","title":"..."}                            (Meilenstein beginnen)
 - {"type":"complete_milestone","title":"..."}                         (Meilenstein erreicht)
 

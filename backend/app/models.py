@@ -194,6 +194,8 @@ class Milestone(Base):
     description = Column(Text, default="")
     status = Column(String, default="planned")  # planned | in_progress | done
     order_index = Column(Integer, default=0)
+    due_date = Column(DateTime, nullable=True)        # Frist (optional)
+    overdue_notified = Column(Boolean, default=False)  # Verzug bereits gemeldet?
     created_by_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
     created_at = Column(DateTime, default=now)
     completed_at = Column(DateTime, nullable=True)

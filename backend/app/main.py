@@ -477,14 +477,23 @@ def list_projects():
 
 class MilestoneIn(BaseModel):
     project_id: int | None = None
-    title: str
-    description: str = ""
+    title: str | None = None
+    description: str | None = None
     status: str | None = None
+    due_date: str | None = None   # 'YYYY-MM-DD' oder leer
+    due_days: float | None = None
 
 
 def _ms_dict(m: Milestone):
+    from datetime import datetime
+    overdue = bool(m.due_date and m.status != "done" and m.due_date < datetime.utcnow())
+    due_in_days = None
+    if m.due_date:
+        due_in_days = round((m.due_date - datetime.utcnow()).total_seconds() / 86400, 1)
     return {"id": m.id, "project_id": m.project_id, "title": m.title,
             "description": m.description, "status": m.status, "order_index": m.order_index,
+            "due_date": m.due_date.isoformat() if m.due_date else None,
+            "overdue": overdue, "due_in_days": due_in_days,
             "created_at": m.created_at.isoformat() if m.created_at else None,
             "completed_at": m.completed_at.isoformat() if m.completed_at else None}
 
@@ -548,8 +557,9 @@ def create_milestone(m: MilestoneIn):
     db = SessionLocal()
     try:
         n = db.query(Milestone).filter(Milestone.project_id == m.project_id).count()
-        ms = Milestone(project_id=m.project_id, title=m.title, description=m.description,
-                       status=m.status or "planned", order_index=n)
+        ms = Milestone(project_id=m.project_id, title=m.title or "Meilenstein",
+                       description=m.description or "", status=m.status or "planned",
+                       order_index=n, due_date=orch.parse_due(m.due_days, m.due_date))
         db.add(ms)
         db.commit()
         return _ms_dict(ms)
@@ -571,7 +581,11 @@ def update_milestone(ms_id: int, m: MilestoneIn):
                 ms.completed_at = _now()
         if m.title:
             ms.title = m.title
-        ms.description = m.description or ms.description
+        if m.description is not None:
+            ms.description = m.description
+        if m.due_date is not None or m.due_days is not None:
+            ms.due_date = orch.parse_due(m.due_days, m.due_date)
+            ms.overdue_notified = False  # neue Frist -> Verzug ggf. neu melden
         db.commit()
         return _ms_dict(ms)
     finally:

@@ -329,22 +329,35 @@ async function loadProgress() {
         ${bar(prog.milestone_percent, "var(--accent)")}</div>
     </div>
     <div class="card" style="margin-bottom:14px"><h3><i data-lucide="flag"></i> Roadmap / Zwischenschritte</h3>
-      ${(prog.milestones && prog.milestones.length) ? prog.milestones.map(m => `<div style="border:1px solid var(--border);border-radius:10px;padding:11px 13px;margin-bottom:9px;background:var(--bg-2)">
+      ${(prog.milestones && prog.milestones.length) ? prog.milestones.map(m => {
+        const due = m.due_date ? new Date(m.due_date) : null;
+        const soon = due && !m.overdue && m.status !== 'done' && m.due_in_days !== null && m.due_in_days <= 2;
+        const dueBadge = m.overdue ? `<span class="pill fired">⚠️ überfällig</span>`
+          : (soon ? `<span class="pill resigned">⏳ bald fällig</span>` : '');
+        const dueTxt = due ? `Frist ${due.toLocaleDateString('de-DE')}${(m.status!=='done' && m.due_in_days!==null) ? ` (${m.due_in_days>=0?'in '+m.due_in_days+' T':Math.abs(m.due_in_days)+' T über'})` : ''}` : '';
+        return `<div style="border:1px solid ${m.overdue ? 'var(--red)' : 'var(--border)'};border-radius:10px;padding:11px 13px;margin-bottom:9px;background:var(--bg-2)">
         <div class="row">
           <div class="avatar role-${m.status === 'done' ? 'developer' : (m.status === 'in_progress' ? 'project_manager' : 'planner')}" style="width:32px;height:32px">
             <i data-lucide="${m.status === 'done' ? 'check' : (m.status === 'in_progress' ? 'loader' : 'circle')}"></i></div>
           <div style="flex:1"><b>${esc(m.title)}</b>${m.description ? `<br><small class="muted">${esc(m.description)}</small>` : ''}</div>
+          ${dueBadge}
           <span class="pill ${stCls[m.status]}">${stTxt[m.status]}</span>
           ${m.status !== 'done' ? `<button class="btn ghost sm" onclick="msDone(${m.id})"><i data-lucide="check"></i></button>` : ''}
           <button class="btn red sm" onclick="msDel(${m.id})"><i data-lucide="trash-2"></i></button>
         </div>
         <div class="row" style="margin-top:8px;gap:8px">
-          <div style="flex:1">${bar(m.percent, m.status === 'done' ? 'var(--green)' : 'var(--accent)')}</div>
-          <small class="muted" style="white-space:nowrap">${m.tasks_done}/${m.tasks_total} Aufgaben${m.completed_at ? ' · ' + new Date(m.completed_at).toLocaleDateString('de-DE') : ''}</small>
+          <div style="flex:1">${bar(m.percent, m.status === 'done' ? 'var(--green)' : (m.overdue ? 'var(--red)' : 'var(--accent)'))}</div>
+          <small class="muted" style="white-space:nowrap">${m.tasks_done}/${m.tasks_total} Aufgaben</small>
         </div>
-      </div>`).join("") : `<div class="muted">Noch keine Meilensteine. Der Projektleiter plant sie automatisch – oder lege selbst welche an:</div>`}
+        <div class="row" style="margin-top:5px;gap:8px">
+          <small class="${m.overdue ? '' : 'muted'}" style="${m.overdue ? 'color:var(--red)' : ''}">${dueTxt || 'keine Frist'}${m.completed_at ? ' · erledigt ' + new Date(m.completed_at).toLocaleDateString('de-DE') : ''}</small>
+          <span class="spacer" style="flex:1"></span>
+          <input type="date" onchange="msDue(${m.id}, this.value)" style="width:auto;margin:0;padding:3px 7px" ${due ? `value="${m.due_date.slice(0,10)}"` : ''}/>
+        </div>
+      </div>`; }).join("") : `<div class="muted">Noch keine Meilensteine. Der Projektleiter plant sie automatisch – oder lege selbst welche an:</div>`}
       ${prog.unassigned_tasks ? `<div class="tag" style="margin-top:4px">${prog.unassigned_done}/${prog.unassigned_tasks} Aufgaben ohne Meilenstein</div>` : ''}
       <div class="row" style="margin-top:10px"><input id="ms-title" placeholder="Eigener Meilenstein" style="margin:0"/>
+        <input id="ms-due" type="date" style="width:auto;margin:0" title="Frist (optional)"/>
         <button class="btn sm" id="ms-add" style="white-space:nowrap"><i data-lucide="plus"></i> Hinzufügen</button></div>
     </div>
     <div class="card"><h3><i data-lucide="brain"></i> Entscheidungen der KI – warum &amp; was</h3>
@@ -358,12 +371,14 @@ async function loadProgress() {
   icons();
   document.getElementById("ms-add").onclick = async () => {
     const t = document.getElementById("ms-title").value.trim(); if (!t) return;
-    await api.post("/api/milestones", { project_id: progProject === "" ? null : Number(progProject), title: t });
+    await api.post("/api/milestones", { project_id: progProject === "" ? null : Number(progProject),
+      title: t, due_date: document.getElementById("ms-due").value || null });
     loadProgress();
   };
 }
-window.msDone = async (id) => { await api.put("/api/milestones/" + id, { title: "", status: "done" }); loadProgress(); };
+window.msDone = async (id) => { await api.put("/api/milestones/" + id, { status: "done" }); loadProgress(); };
 window.msDel = async (id) => { await fetch("/api/milestones/" + id, { method: "DELETE" }); loadProgress(); };
+window.msDue = async (id, val) => { await api.put("/api/milestones/" + id, { due_date: val || null }); loadProgress(); };
 
 // ---------- Cookbook / Regelwerk ----------
 async function renderCookbook() {
@@ -484,7 +499,7 @@ window.decide = async (id, d) => { await api.post(`/api/approvals/${id}/${d}`); 
 // ---------- Activity ----------
 async function renderActivity() {
   const evs = await api.get("/api/events");
-  const ic = { hire: "user-plus", fire: "user-minus", resign: "door-open", task: "list-checks", rating: "star", message: "mail", error: "alert-triangle", info: "info" };
+  const ic = { hire: "user-plus", fire: "user-minus", resign: "door-open", task: "list-checks", rating: "star", message: "mail", error: "alert-triangle", info: "info", milestone: "flag", deadline: "alarm-clock", mcp: "plug", file: "file", exec: "terminal", rule: "book", skill: "zap" };
   root.innerHTML = `<div class="card"><h3><i data-lucide="activity"></i> Aktivitäts-Log</h3>
     ${evs.length ? evs.map(e => `<div class="agent-row"><div class="avatar" style="background:var(--panel-2);color:var(--text-dim)"><i data-lucide="${ic[e.kind] || "circle"}"></i></div>
       <div class="info"><b>${esc(e.text)}</b><small>${e.agent ? esc(e.agent) + " · " : ""}${new Date(e.created_at).toLocaleString("de-DE")}</small></div></div>`).join("") : `<div class="empty">Noch keine Aktivität.</div>`}</div>`;
