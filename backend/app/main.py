@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from . import mcp_client
 from . import ollama_admin
 from . import orchestrator as orch
 from . import providers
@@ -626,9 +627,15 @@ def delete_skill(skill_id: int):
 
 
 def _mcp_dict(m: McpServer):
+    try:
+        tools = json.loads(m.tools_json or "[]")
+    except Exception:  # noqa: BLE001
+        tools = []
     return {"id": m.id, "name": m.name, "description": m.description,
             "transport": m.transport, "command": m.command, "url": m.url,
-            "enabled": m.enabled}
+            "enabled": m.enabled, "status": m.status, "last_error": m.last_error,
+            "tools": [{"name": t.get("name"), "description": t.get("description", "")}
+                      for t in tools]}
 
 
 @app.get("/api/mcp")
@@ -671,6 +678,58 @@ def delete_mcp(mcp_id: int):
         return {"ok": True}
     finally:
         db.close()
+
+
+class McpCall(BaseModel):
+    tool: str
+    arguments: dict = {}
+
+
+@app.post("/api/mcp/{mcp_id}/connect")
+async def mcp_connect(mcp_id: int):
+    """Verbindet sich mit dem MCP-Server, lädt die Tool-Liste und cached sie."""
+    db = SessionLocal()
+    try:
+        m = db.get(McpServer, mcp_id)
+        if not m:
+            raise HTTPException(404, "MCP-Server nicht gefunden")
+        transport, command, url, name = m.transport, m.command, m.url, m.name
+    finally:
+        db.close()
+    try:
+        tools = await mcp_client.list_tools(transport, command=command, url=url)
+        status, last_error, tools_json = "connected", "", json.dumps(tools)
+    except Exception as e:  # noqa: BLE001
+        tools, status, last_error, tools_json = [], "error", str(e), "[]"
+    db = SessionLocal()
+    try:
+        m = db.get(McpServer, mcp_id)
+        m.tools_json, m.status, m.last_error = tools_json, status, last_error
+        db.commit()
+        return {"status": status, "error": last_error,
+                "tools": [{"name": t.get("name"), "description": t.get("description", "")}
+                          for t in tools]}
+    finally:
+        db.close()
+
+
+@app.post("/api/mcp/{mcp_id}/call")
+async def mcp_call(mcp_id: int, call: McpCall):
+    """Ruft ein MCP-Tool manuell auf (zum Testen)."""
+    db = SessionLocal()
+    try:
+        m = db.get(McpServer, mcp_id)
+        if not m:
+            raise HTTPException(404, "MCP-Server nicht gefunden")
+        transport, command, url = m.transport, m.command, m.url
+    finally:
+        db.close()
+    try:
+        result = await mcp_client.call_tool(transport, call.tool, call.arguments,
+                                            command=command, url=url)
+        return {"ok": True, "text": mcp_client.result_to_text(result)}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
 
 
 # --------------------------------------------------------------------------- #

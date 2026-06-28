@@ -116,14 +116,21 @@ eingespeist. **Auch die KI legt Regeln an** (Aktion `add_rule`), wenn ihr auffä
 dass etwas immer wieder gleich gemacht wird. Du kannst jede Regel ansehen,
 bearbeiten, aktiv/inaktiv schalten oder löschen.
 
-### Skills & MCP (leichtgewichtig)
+### Skills & MCP (echter MCP-Client)
 
 - **Skills** – wiederverwendbare Fähigkeiten als Anweisungs-/Befehlsvorlage.
   Agenten nutzen sie mit `use_skill`; hat ein Skill einen Befehl (`{args}` wird
   ersetzt), wird er im Workspace ausgeführt, sonst dient er als Vorgehens-Vorlage.
-- **MCP-Registry** – externe MCP-Server eintragen (stdio/http). Agenten kennen
-  diese Werkzeuge und berücksichtigen sie in ihrer Planung. *(Der vollständige
-  MCP-Client-Aufruf ist als nächster Ausbauschritt vorgesehen.)*
+- **MCP-Server (echter Client)** – externe MCP-Server eintragen (stdio/http).
+  Per **Verbinden** lädt AI-Hub die echte Tool-Liste (JSON-RPC `tools/list`) und
+  zeigt sie an. Agenten rufen Tools dann wirklich auf (Aktion `mcp_call` →
+  `tools/call`); das Ergebnis kommt als Nachricht zurück. Die verfügbaren Tools
+  stehen automatisch im System-Prompt der Agenten.
+
+  **Sofort testbar:** Ein mitgelieferter Demo-Server bietet die Tools `echo` und
+  `add`. In *Skills & MCP* anlegen:
+  Name `demo`, Transport `stdio`, Befehl `python -m backend.app.mcp_demo_server`,
+  dann **Verbinden**.
 
 ### Bewertung, Kündigung & Modelle
 
@@ -151,6 +158,8 @@ backend/app/
   orchestrator.py  Runden-Engine: Aktionen, Hiring/Firing, Bewertung, Projekt-Kontext
   workspace.py     Code-Werkstatt: Dateien schreiben/lesen, Befehle ausführen (Sandbox)
   ollama_admin.py  Ollama: Modelle auflisten/ziehen/laden/entladen/löschen
+  mcp_client.py    Echter MCP-Client (JSON-RPC über stdio/http)
+  mcp_demo_server.py  Mitgelieferter Demo-MCP-Server (Tools: echo, add)
   providers/       claude.py · openai_provider.py · ollama.py · base.py (Mock)
   prompts.py       System-Prompts + Aktions-Spezifikation
   roles.py         Rollenkatalog (wer wen einstellen darf)
@@ -178,6 +187,7 @@ Kontext (Rolle, Team, Nachrichten, Aufgaben, **geltende Regeln**, verfügbare
 | `write_file` / `read_file` / `run_command` | Code-Werkstatt (echte Dateien & Ausführung) |
 | `add_rule` | Standard/Regel im Cookbook anlegen |
 | `use_skill` | Skill nutzen (Befehl ausführen oder Vorgehen anwenden) |
+| `mcp_call` | Echtes MCP-Tool eines verbundenen Servers aufrufen |
 
 So entsteht die Zusammenarbeit. Ergebnisse von Fachkräften sind Text-Artefakte
 (Konzept, Plan) **oder** echte Dateien im Workspace (Code), je nach Aufgabe.
@@ -210,5 +220,6 @@ Viele Werte lassen sich auch **live in der UI** unter *Einstellungen* ändern.
   Autonomie-Stufe, Freigaben und das Befehlslimit behältst du die Kontrolle; mit
   dem Schalter *Agenten laufen automatisch* lässt sich der Betrieb pausieren.
 - **Sandbox-Isolation**: siehe Hinweis bei der Code-Werkstatt.
-- **Nächster Ausbauschritt**: vollständiger MCP-Client (Agenten rufen echte
-  MCP-Tools auf statt sie nur zu kennen).
+- **MCP**: Der Client baut pro Aufruf eine kurze Sitzung auf (initialize →
+  tools/list bzw. tools/call). Das ist robust; für sehr häufige Aufrufe wäre eine
+  langlebige Sitzung der nächste Optimierungsschritt.

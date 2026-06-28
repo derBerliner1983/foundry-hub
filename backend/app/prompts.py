@@ -26,6 +26,7 @@ Code-Werkstatt (vor allem für Entwickler/QA – echte Dateien & Ausführung):
 Cookbook & Skills:
 - {"type":"add_rule","title":"...","content":"die Regel/der Standard","scope":"global|role|project"}
 - {"type":"use_skill","name":"<skillname>","args":"optionale Argumente"}
+- {"type":"mcp_call","server":"<servername>","tool":"<toolname>","arguments":{...}}  (echtes MCP-Tool aufrufen; Ergebnis kommt als Nachricht zurück)
 
 Regeln:
 - Arbeite selbständig. Frage den Nutzer NUR über ask_user, wenn du ohne seine Entscheidung nicht weiterkommst.

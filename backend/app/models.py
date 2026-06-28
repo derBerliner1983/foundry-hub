@@ -172,6 +172,9 @@ class McpServer(Base):
     command = Column(String, default="")          # bei stdio
     url = Column(String, default="")              # bei http
     enabled = Column(Boolean, default=True)
+    tools_json = Column(Text, default="[]")        # gecachte Tool-Liste (nach Verbinden)
+    status = Column(String, default="unknown")     # unknown | connected | error
+    last_error = Column(String, default="")
     created_at = Column(DateTime, default=now)
 
 

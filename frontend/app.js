@@ -341,19 +341,28 @@ async function renderSkills() {
         <input id="sk-cmd" placeholder="Optionaler Befehl, {args} wird ersetzt (z. B. pytest {args})"/>
         <button class="btn" id="sk-add"><i data-lucide="plus"></i> Skill speichern</button>
       </div>
-      <div class="card"><h3><i data-lucide="server"></i> MCP-Server (Registry)</h3>
-        ${mcp.length ? mcp.map(m => `<div class="agent-row">
-          <div class="avatar role-planner"><i data-lucide="plug"></i></div>
-          <div class="info"><b>${esc(m.name)}</b><small>${esc(m.transport)} · ${esc(m.description)}</small></div>
-          <span class="pill ${m.enabled ? 'employed' : 'resigned'}">${m.enabled ? 'aktiv' : 'aus'}</span>
-          <button class="btn red sm" onclick="delMcp(${m.id})"><i data-lucide="trash-2"></i></button></div>`).join("") : `<div class="muted">keine</div>`}
+      <div class="card"><h3><i data-lucide="server"></i> MCP-Server</h3>
+        ${mcp.length ? mcp.map(m => {
+          const statusCls = m.status === 'connected' ? 'employed' : (m.status === 'error' ? 'fired' : 'resigned');
+          const toolList = (m.tools || []).map(t => `<span class="tag" title="${esc(t.description)}">${esc(t.name)}</span>`).join(" ");
+          return `<div class="msg">
+            <div class="meta"><b>${esc(m.name)}</b> <span class="tag">${esc(m.transport)}</span>
+              <span class="pill ${statusCls}">${m.status === 'connected' ? '✓ verbunden' : (m.status === 'error' ? '✕ Fehler' : 'unverbunden')}</span>
+              <span class="spacer" style="flex:1"></span>
+              <button class="btn ghost sm" onclick="mcpConnect(${m.id})"><i data-lucide="refresh-cw"></i> Verbinden</button>
+              <button class="btn red sm" onclick="delMcp(${m.id})"><i data-lucide="trash-2"></i></button></div>
+            <div class="body">${esc(m.description)}</div>
+            ${toolList ? `<div style="margin-top:6px">Tools: ${toolList}</div>` : ''}
+            ${m.status === 'error' && m.last_error ? `<div class="tag" style="color:var(--red);margin-top:6px">${esc(m.last_error)}</div>` : ''}
+          </div>`;
+        }).join("") : `<div class="muted">keine</div>`}
         <hr style="border-color:var(--border);margin:12px 0"/>
         <input id="mc-name" placeholder="Name (z. B. github)"/>
         <input id="mc-desc" placeholder="Beschreibung / Zweck"/>
         <div class="row"><select id="mc-transport" style="margin:0"><option value="stdio">stdio</option><option value="http">http</option></select>
           <input id="mc-target" placeholder="Befehl oder URL" style="margin:0"/></div>
         <button class="btn" id="mc-add"><i data-lucide="plus"></i> MCP-Server speichern</button>
-        <div class="tag" style="margin-top:8px">Leichtgewichtig: Agenten kennen diese Werkzeuge und können sie anfragen.</div>
+        <div class="tag" style="margin-top:8px">Demo: Name <b>demo</b>, stdio, Befehl <code>python -m backend.app.mcp_demo_server</code></div>
       </div>
     </div>`;
   icons();
@@ -373,6 +382,11 @@ async function renderSkills() {
 }
 window.delSkill = async (id) => { await fetch("/api/skills/" + id, { method: "DELETE" }); renderSkills(); };
 window.delMcp = async (id) => { await fetch("/api/mcp/" + id, { method: "DELETE" }); renderSkills(); };
+window.mcpConnect = async (id) => {
+  const r = await api.post(`/api/mcp/${id}/connect`);
+  if (r.status === "error") alert("Verbindung fehlgeschlagen: " + (r.error || ""));
+  renderSkills();
+};
 
 // ---------- Approvals ----------
 async function renderApprovals() {

@@ -4,6 +4,7 @@ import re
 
 from sqlalchemy import func, or_
 
+from . import mcp_client
 from . import providers
 from . import workspace
 from .config import config
@@ -83,7 +84,16 @@ def skills_text(db) -> str:
 
 def mcp_text(db) -> str:
     servers = db.query(McpServer).filter(McpServer.enabled == True).all()  # noqa: E712
-    return "\n".join(f"  • {m.name} ({m.transport}): {m.description}" for m in servers)
+    lines = []
+    for m in servers:
+        try:
+            tools = json.loads(m.tools_json or "[]")
+        except Exception:  # noqa: BLE001
+            tools = []
+        tnames = ", ".join(t.get("name", "") for t in tools)
+        suffix = f" – Tools: {tnames}" if tnames else " (noch nicht verbunden)"
+        lines.append(f"  • {m.name} ({m.transport}): {m.description}{suffix}")
+    return "\n".join(lines)
 
 
 def team_summary(db, viewer: Agent) -> str:
@@ -132,8 +142,8 @@ def _resolve_model(settings, role, provider, model):
     return provider, model
 
 
-def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
-                    current_task: Task, project_ctx=None):
+async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
+                          current_task: Task, project_ctx=None):
     actions = parsed.get("actions", [])[:MAX_ACTIONS_PER_TURN]
     last_hired_id = None
     # Projektkontext: Projekt der ausgelösten Nachricht/Aufgabe, sonst eigenes Projekt
@@ -267,8 +277,35 @@ def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
         elif atype == "use_skill":
             _do_use_skill(db, agent, act, current_task, pctx)
 
+        elif atype == "mcp_call":
+            await _do_mcp_call(db, agent, act, pctx)
+
     # Eingehende Aufgabe als in Bearbeitung markieren, falls nichts abgeschlossen
     db.commit()
+
+
+async def _do_mcp_call(db, agent, act, pctx):
+    name = act.get("server", "")
+    server = db.query(McpServer).filter(McpServer.name == name,
+                                        McpServer.enabled == True).first()  # noqa: E712
+    if not server:
+        log(db, "error", f"MCP-Server '{name}' nicht gefunden/aktiv", agent_id=agent.id)
+        return
+    tool = act.get("tool", "")
+    args = act.get("arguments", {})
+    if not isinstance(args, dict):
+        args = {}
+    try:
+        result = await mcp_client.call_tool(server.transport, tool, args,
+                                            command=server.command, url=server.url)
+        text = mcp_client.result_to_text(result)[:2000]
+        log(db, "mcp", f"{name}.{tool}() → {text[:120]}", agent_id=agent.id)
+        send_message(db, sender_kind="system", sender_agent_id=None,
+                     recipient_kind="agent", recipient_agent_id=agent.id,
+                     subject=f"MCP-Ergebnis {name}.{tool}",
+                     body=text, project_id=pctx)
+    except Exception as e:  # noqa: BLE001
+        log(db, "error", f"MCP-Fehler {name}.{tool}: {e}", agent_id=agent.id)
 
 
 def _do_use_skill(db, agent, act, current_task, pctx):
@@ -505,7 +542,7 @@ async def run_agent_turn(db, agent: Agent):
         return None
 
     parsed = parse_actions(result.text)
-    execute_actions(db, agent, settings, parsed, current_task, project_ctx)
+    await execute_actions(db, agent, settings, parsed, current_task, project_ctx)
     return {"agent": agent.name, "provider": result.provider,
             "thoughts": parsed.get("thoughts", ""), "actions": parsed.get("actions", [])}
 
