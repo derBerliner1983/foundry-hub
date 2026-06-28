@@ -309,11 +309,17 @@ pausiert). Der Hauptschalter *Agenten laufen automatisch* pausiert alles.
 
 ### Wissensspeicher & Audit
 
-- **Wissensspeicher** – unter *Wissen* legst du Notizen ab oder lädst Dateien
-  (txt/md/Code) hoch. Agenten durchsuchen das per `search_memory` – **inkl. aller
-  früheren Entscheidungen** der Firma – um sich zu „erinnern" und Doppelarbeit zu
-  vermeiden (leichtgewichtige Stichwortsuche, keine externe Vektor-DB nötig).
-- **Live-Vorschau** – HTML-Dateien im Workspace direkt im Browser ansehen (👁).
+- **Wissensspeicher (Vektor-RAG)** – unter *Wissen* legst du Notizen ab oder lädst
+  Dateien (txt/md/Code) hoch. Agenten durchsuchen das per `search_memory` – **inkl.
+  aller früheren Entscheidungen** der Firma. Ist ein **OpenAI-Key** oder **Ollama**
+  (`nomic-embed-text`) verfügbar, läuft eine echte **Vektor-Suche (Embeddings,
+  Cosinus-Ähnlichkeit)**; sonst eine Stichwortsuche. Button „Vektor-Index" berechnet
+  die Embeddings neu.
+- **Live-Vorschau** – statische HTML-Dateien direkt im Browser (👁); für **laufende
+  Web-Apps** startet „Vorschau" einen Dev-Server im Sandbox-Container (Port 8090)
+  und öffnet ihn (eigener Befehl wie `npm run dev` möglich).
+- **Org-Chart** – das Team wird als **Diagramm/Baum** dargestellt (plus Liste mit
+  Bewertung).
 - **Audit-Log** – wichtige Owner-Aktionen (Nutzer anlegen, Firma teilen) werden
   protokolliert und erscheinen in der Aktivität.
 

@@ -335,6 +335,16 @@ async function renderOrg() {
   const byManager = {};
   agentsCache.forEach(a => { (byManager[a.manager_id] = byManager[a.manager_id] || []).push(a); });
 
+  const employed = agentsCache.filter(a => a.status === "employed");
+  function node(a) {
+    const r = a.rating;
+    const kids = employed.filter(c => c.manager_id === a.id);
+    return `<li><div class="node" onclick="openAgent(${a.id})" style="cursor:pointer">
+        <div class="avatar role-${a.role}" style="width:30px;height:30px">${initials(a.name)}</div>
+        <div><b>${esc(a.name)}</b><small>${esc(a.title)} · ${r ?? '–'}★${a.stuck ? ' · ⚠️' : ''}</small></div>
+      </div>${kids.length ? `<ul>${kids.map(node).join("")}</ul>` : ""}</li>`;
+  }
+  // Einfache Liste als Fallback + Baum
   function row(a, depth) {
     const r = a.rating; const p = r ? (r / 5) * 100 : 0;
     return `<div class="agent-row ${depth ? "indent" : ""}" style="margin-left:${depth * 26}px">
@@ -347,7 +357,10 @@ async function renderOrg() {
     </div>` + (byManager[a.id] || []).map(c => row(c, depth + 1)).join("");
   }
   const chef = agentsCache.find(a => a.role === "ceo");
-  root.innerHTML = `<div class="card"><h3><i data-lucide="network"></i> Organigramm</h3>${chef ? row(chef, 0) : `<div class="empty">Kein Chef.</div>`}</div>
+  root.innerHTML = `<div class="card"><h3><i data-lucide="network"></i> Organigramm</h3>
+      ${chef ? `<ul class="tree">${node(chef)}</ul>` : `<div class="empty">Kein Chef.</div>`}</div>
+    <div class="card" style="margin-top:14px"><h3><i data-lucide="list"></i> Team (Liste & Bewertung)</h3>
+      ${chef ? row(chef, 0) : ''}</div>
     <div id="agent-detail"></div>`;
   icons();
 }
@@ -409,6 +422,7 @@ async function renderWorkshop() {
         <input type="file" id="ws-upload" class="hidden"/>
         <button class="btn ghost sm" id="ws-up"><i data-lucide="upload"></i> Hochladen</button>
         <button class="btn ghost sm" id="ws-zip"><i data-lucide="download"></i> ZIP</button>
+        <button class="btn ghost sm" id="ws-preview"><i data-lucide="play-circle"></i> Vorschau</button>
         <button class="btn ghost sm" id="ws-reset"><i data-lucide="trash-2"></i> leeren</button>
         <select id="ws-proj" style="width:auto;margin:0">${opts || '<option>kein Projekt</option>'}</select></div>
     </div>
@@ -440,6 +454,12 @@ async function renderWorkshop() {
   };
   document.getElementById("ws-zip").onclick = () => {
     window.open("/api/workspace/zip?project_id=" + (wsProject || ""), "_blank");
+  };
+  document.getElementById("ws-preview").onclick = async () => {
+    const cmd = prompt("Live-Vorschau starten. Befehl (leer = statischer Server für HTML/CSS/JS):\nz. B. 'npm run dev -- --port 8090' oder leer", "");
+    const r = await api.post("/api/preview/start", { project_id: wsProject ? Number(wsProject) : null, cmd: cmd || "" });
+    if (r.ok) { setTimeout(() => window.open(r.url, "_blank"), 1200); }
+    else alert("Vorschau fehlgeschlagen: " + (r.error || ""));
   };
   api.get("/api/sandbox/status").then(st => {
     const el = document.getElementById("ws-sandbox"); if (!el) return;
@@ -624,7 +644,9 @@ async function renderKnowledge() {
       <textarea id="kn-content" placeholder="Inhalt/Notiz, den die Agenten durchsuchen können …"></textarea>
       <div class="row"><button class="btn" id="kn-add"><i data-lucide="plus"></i> Speichern</button>
         <button class="btn ghost" id="kn-up"><i data-lucide="upload"></i> Datei hochladen (txt/md/code)</button>
+        <button class="btn ghost" id="kn-reindex" title="Embeddings neu berechnen"><i data-lucide="sparkles"></i> Vektor-Index</button>
         <input type="file" id="kn-file" class="hidden"/></div>
+      <span class="muted" id="kn-idxstatus"></span>
     </div>
     <div class="card" style="margin-bottom:14px"><h3><i data-lucide="search"></i> Wissen durchsuchen</h3>
       <div class="row"><input id="kn-q" placeholder="Suchbegriff …" style="margin:0" onkeydown="if(event.key==='Enter')knSearch()"/>
@@ -643,6 +665,11 @@ async function renderKnowledge() {
     const t = document.getElementById("kn-title").value.trim(); if (!t) return;
     await api.post("/api/knowledge", { title: t, content: document.getElementById("kn-content").value });
     renderKnowledge();
+  };
+  document.getElementById("kn-reindex").onclick = async () => {
+    document.getElementById("kn-idxstatus").textContent = "indexiere …";
+    const r = await api.post("/api/knowledge/reindex");
+    document.getElementById("kn-idxstatus").textContent = r.available ? `✓ Vektor-Suche aktiv (${r.indexed} Dok.)` : "Keine Embeddings verfügbar – Stichwortsuche (OpenAI-Key oder Ollama nutzen)";
   };
   document.getElementById("kn-up").onclick = () => document.getElementById("kn-file").click();
   document.getElementById("kn-file").onchange = async (e) => {

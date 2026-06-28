@@ -46,6 +46,7 @@ class Config:
     # (echte, isolierte Installation & Builds), statt im App-Container.
     SANDBOX_URL = os.getenv("SANDBOX_URL", "")
     SANDBOX_TIMEOUT = int(os.getenv("SANDBOX_TIMEOUT", "600"))
+    PREVIEW_PORT = int(os.getenv("PREVIEW_PORT", "8090"))
 
     # Ollama: Standardmodell, das beim Start NUR gezogen wird, wenn noch
     # gar kein Modell installiert ist. Leer = nie automatisch ziehen.

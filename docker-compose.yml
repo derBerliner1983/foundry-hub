@@ -50,6 +50,8 @@ services:
     container_name: aihub-sandbox
     environment:
       - WORKSPACE_DIR=/data/workspace
+    ports:
+      - "8090:8090"   # Live-Vorschau (Dev-Server der Projekte)
     volumes:
       - aihub-data:/data
     restart: unless-stopped

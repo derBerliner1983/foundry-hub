@@ -1172,6 +1172,50 @@ def sandbox_reset(project_id: int | None = None):
     return workspace.reset_workspace(project_id)
 
 
+_local_preview = {"proc": None}
+
+
+class PreviewIn(BaseModel):
+    project_id: int | None = None
+    cmd: str = ""
+
+
+@app.post("/api/preview/start")
+def preview_start(p: PreviewIn):
+    """Startet einen Live-Vorschau-Server für das Projekt (Sandbox oder lokal)."""
+    rel = f"project_{p.project_id if p.project_id is not None else 'shared'}"
+    port = config.PREVIEW_PORT
+    if config.SANDBOX_URL:
+        try:
+            import httpx
+            httpx.post(f"{config.SANDBOX_URL}/serve",
+                       json={"rel": rel, "cmd": p.cmd, "port": port}, timeout=15)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": str(e)}
+    else:
+        import subprocess
+        if _local_preview["proc"] and _local_preview["proc"].poll() is None:
+            _local_preview["proc"].terminate()
+        cwd = workspace.safe_abspath(p.project_id, "")
+        cmd = p.cmd or f"python -m http.server {port} --bind 0.0.0.0"
+        _local_preview["proc"] = subprocess.Popen(cmd, shell=True, cwd=cwd)
+    return {"ok": True, "port": port, "url": f"http://localhost:{port}"}
+
+
+@app.post("/api/preview/stop")
+def preview_stop():
+    if config.SANDBOX_URL:
+        try:
+            import httpx
+            httpx.post(f"{config.SANDBOX_URL}/serve/stop", timeout=10)
+        except Exception:  # noqa: BLE001
+            pass
+    elif _local_preview["proc"]:
+        _local_preview["proc"].terminate()
+        _local_preview["proc"] = None
+    return {"ok": True}
+
+
 @app.get("/api/git/history")
 def git_history(project_id: int | None = None):
     return {"history": workspace.git_history(project_id)}
@@ -1568,12 +1612,20 @@ def list_knowledge():
         db.close()
 
 
+def _embed_json(title, content):
+    from . import embeddings
+    import json as _j
+    v = embeddings.embed((title or "") + "\n" + (content or ""))
+    return _j.dumps(v) if v else ""
+
+
 @app.post("/api/knowledge")
 def add_knowledge(d: DocIn):
     from .models import Document
     db = SessionLocal()
     try:
-        doc = Document(title=d.title, content=d.content, project_id=d.project_id, source="note")
+        doc = Document(title=d.title, content=d.content, project_id=d.project_id,
+                       source="note", embedding=_embed_json(d.title, d.content))
         db.add(doc)
         db.commit()
         return {"ok": True, "id": doc.id}
@@ -1591,10 +1643,29 @@ async def upload_knowledge(file: UploadFile = File(...)):
         text = ""
     db = SessionLocal()
     try:
-        doc = Document(title=file.filename or "Dokument", content=text[:200000], source="upload")
+        doc = Document(title=file.filename or "Dokument", content=text[:200000],
+                       source="upload", embedding=_embed_json(file.filename, text[:8000]))
         db.add(doc)
         db.commit()
         return {"ok": True, "id": doc.id, "chars": len(text)}
+    finally:
+        db.close()
+
+
+@app.post("/api/knowledge/reindex")
+def reindex_knowledge():
+    """Berechnet Embeddings für alle Dokumente neu (z. B. nach Key-Eingabe)."""
+    from .models import Document
+    from . import embeddings
+    db = SessionLocal()
+    try:
+        n = 0
+        if embeddings.available():
+            for d in db.query(Document).filter(Document.tenant_id == context.tid()).all():
+                d.embedding = _embed_json(d.title, d.content[:8000])
+                n += 1
+            db.commit()
+        return {"ok": True, "indexed": n, "available": embeddings.available()}
     finally:
         db.close()
 

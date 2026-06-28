@@ -309,6 +309,7 @@ class Document(Base):
     title = Column(String, nullable=False)
     content = Column(Text, default="")
     source = Column(String, default="note")  # note | upload
+    embedding = Column(Text, default="")      # JSON-Vektor (für Vektor-RAG)
     created_at = Column(DateTime, default=now)
 
 

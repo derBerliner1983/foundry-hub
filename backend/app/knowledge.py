@@ -2,9 +2,11 @@
 
 Durchsucht hochgeladene Dokumente UND frühere Entscheidungen der Firma per
 Stichwort-Bewertung. So „erinnern" sich Agenten an Wissen und vergangene Schritte."""
+import json
 import re
 
 from . import context
+from . import embeddings
 from .database import SessionLocal
 from .models import Decision, Document
 
@@ -33,12 +35,20 @@ def search(query: str, limit: int = 5) -> list:
     if not terms:
         return []
     tenant = context.tid()
+    qvec = embeddings.embed(query)  # echtes Vektor-Embedding (oder None)
     db = SessionLocal()
     try:
         results = []
         for d in db.query(Document).filter(Document.tenant_id == tenant).all():
-            sc = _score(d.title + " " + d.content, terms)
-            if sc:
+            sc = None
+            if qvec and d.embedding:
+                try:
+                    sc = embeddings.cosine(qvec, json.loads(d.embedding)) * 100  # 0..100
+                except Exception:  # noqa: BLE001
+                    sc = None
+            if sc is None:  # Fallback: Stichwort
+                sc = _score(d.title + " " + d.content, terms)
+            if sc and sc > 0:
                 results.append((sc, "📄 " + d.title, _snippet(d.content, terms)))
         for dec in (db.query(Decision).filter(Decision.tenant_id == tenant)
                     .order_by(Decision.id.desc()).limit(300).all()):
