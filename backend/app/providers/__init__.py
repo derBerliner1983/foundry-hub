@@ -12,10 +12,29 @@ _PROVIDERS = {
 }
 
 
+# Fallback-Modelle je Anbieter (falls der primäre Anbieter ausfällt)
+_FALLBACK_MODEL = {"claude": "claude-sonnet-4-6", "openai": "gpt-4o-mini", "ollama": "llama3.2"}
+_FALLBACK_ORDER = ["claude", "openai", "ollama"]
+
+
 async def chat(provider: str, model: str, system: str, messages: list) -> LLMResult:
-    """Ruft das gewählte Modell auf. Fällt bei fehlendem Key/Fehler auf Mock zurück."""
+    """Ruft das gewählte Modell auf. Schlägt es fehl, wird automatisch ein anderer
+    verfügbarer Anbieter versucht; zuletzt der Mock."""
     impl = _PROVIDERS.get(provider, _PROVIDERS["mock"])
-    return await impl.chat(model=model, system=system, messages=messages)
+    if provider != "mock" and impl.available():
+        res = await impl.chat(model=model, system=system, messages=messages)
+        if res.ok and res.provider != "mock":
+            return res
+    # Fallback-Kette über verfügbare Anbieter
+    for name in _FALLBACK_ORDER:
+        if name == provider:
+            continue
+        p = _PROVIDERS[name]
+        if p.available():
+            res = await p.chat(model=_FALLBACK_MODEL[name], system=system, messages=messages)
+            if res.ok and res.provider != "mock":
+                return res
+    return await _PROVIDERS["mock"].chat(model=model, system=system, messages=messages)
 
 
 def available_providers() -> dict:

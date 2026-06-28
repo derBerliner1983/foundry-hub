@@ -1,7 +1,12 @@
 """Authentifizierung: Benutzer, Passwörter (scrypt), Sitzungen (Cookie),
 Tenant-Zugriff (eigene Firma + geteilte)."""
+import base64
 import hashlib
+import hmac
+import os
 import secrets as pysecrets  # stdlib (nicht das App-Modul)
+import struct
+import time
 from datetime import datetime, timedelta
 
 from .database import SessionLocal
@@ -62,8 +67,36 @@ def create_user(username: str, password: str, is_owner: bool = False):
         db.close()
 
 
-def login(username: str, password: str):
-    """Gibt (token, error) zurück. error: None | 'locked' | 'invalid'."""
+# --------------------------------------------------------------------------- #
+# 2FA (TOTP, RFC 6238)
+# --------------------------------------------------------------------------- #
+def gen_totp_secret() -> str:
+    return base64.b32encode(os.urandom(20)).decode().rstrip("=")
+
+
+def _totp(secret: str, t: float) -> str:
+    pad = "=" * ((8 - len(secret) % 8) % 8)
+    key = base64.b32decode(secret + pad, casefold=True)
+    msg = struct.pack(">Q", int(t // 30))
+    h = hmac.new(key, msg, hashlib.sha1).digest()
+    o = h[-1] & 0x0F
+    code = (struct.unpack(">I", h[o:o + 4])[0] & 0x7FFFFFFF) % 1_000_000
+    return f"{code:06d}"
+
+
+def totp_verify(secret: str, code: str) -> bool:
+    if not secret or not code:
+        return False
+    now = time.time()
+    return any(_totp(secret, now + d) == str(code).strip().zfill(6) for d in (-30, 0, 30))
+
+
+def otpauth_uri(username: str, secret: str) -> str:
+    return f"otpauth://totp/AI-Hub:{username}?secret={secret}&issuer=AI-Hub"
+
+
+def login(username: str, password: str, code: str = None):
+    """Gibt (token, error) zurück. error: None | 'locked' | 'invalid' | '2fa'."""
     if _is_locked(username):
         return None, "locked"
     db = SessionLocal()
@@ -72,6 +105,8 @@ def login(username: str, password: str):
         if not u or not verify_password(password, u.salt, u.password_hash):
             _record_fail(username)
             return None, "invalid"
+        if u.totp_enabled and not totp_verify(u.totp_secret, code):
+            return None, "2fa"
         _fails.pop(username, None)
         token = pysecrets.token_urlsafe(32)
         db.add(DBSession(token=token, user_id=u.id, active_tenant_id=u.id,

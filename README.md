@@ -288,6 +288,41 @@ Unter *Einstellungen → Zeitplan* legst du fest, **wann** die Agenten aktiv wer
 Der Status oben rechts zeigt den aktuellen Modus (läuft / Zeitfenster / manuell /
 pausiert). Der Hauptschalter *Agenten laufen automatisch* pausiert alles.
 
+### Mehr Qualität & Automatisierung
+
+- **4-Augen-Prinzip** – ist *Review verlangen* an, geht Entwicklerarbeit erst in
+  „erledigt", nachdem der Vorgesetzte sie freigegeben hat (zusätzlich zum Test-Gate).
+- **Risiko-Freigaben** – gefährliche Befehle (`rm -rf`, `git push`, `deploy`,
+  `curl | sh` …) werden vor der Ausführung zur Freigabe vorgelegt.
+- **Modell-Routing & Fallback** – Entwickler/QA können automatisch das stärkere
+  Modell nutzen; fällt ein Anbieter aus, wird automatisch ein anderer verfügbarer
+  Anbieter verwendet (zuletzt der Mock).
+- **Projekt-Testbefehl** – pro Projekt hinterlegbar (`pytest -q` o. ä.); fließt in
+  die Verifikation ein.
+- **Wiederkehrende Aufträge** – z. B. „täglich 8 Uhr Report" (stündlich/täglich/
+  wöchentlich) als Projekt oder Einzelaufgabe.
+- **Sprach-Eingabe** – Aufträge per Mikrofon diktieren (Browser-Spracherkennung).
+- **2FA (TOTP)** – optional pro Konto; Login fragt dann zusätzlich den 6-stelligen
+  Code ab. **Telegram-Benachrichtigungen** zusätzlich zur E-Mail.
+- **Backup** – vollständiger JSON-Export der Firma; Import von Regeln/Skills/
+  MCP-Servern aus einem Export.
+
+### Wissensspeicher & Audit
+
+- **Wissensspeicher (Vektor-RAG)** – unter *Wissen* legst du Notizen ab oder lädst
+  Dateien (txt/md/Code) hoch. Agenten durchsuchen das per `search_memory` – **inkl.
+  aller früheren Entscheidungen** der Firma. Ist ein **OpenAI-Key** oder **Ollama**
+  (`nomic-embed-text`) verfügbar, läuft eine echte **Vektor-Suche (Embeddings,
+  Cosinus-Ähnlichkeit)**; sonst eine Stichwortsuche. Button „Vektor-Index" berechnet
+  die Embeddings neu.
+- **Live-Vorschau** – statische HTML-Dateien direkt im Browser (👁); für **laufende
+  Web-Apps** startet „Vorschau" einen Dev-Server im Sandbox-Container (Port 8090)
+  und öffnet ihn (eigener Befehl wie `npm run dev` möglich).
+- **Org-Chart** – das Team wird als **Diagramm/Baum** dargestellt (plus Liste mit
+  Bewertung).
+- **Audit-Log** – wichtige Owner-Aktionen (Nutzer anlegen, Firma teilen) werden
+  protokolliert und erscheinen in der Aktivität.
+
 ### Budget & Kosten
 
 AI-Hub erfasst den **Token-Verbrauch** jedes LLM-Aufrufs und schätzt die Kosten

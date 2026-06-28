@@ -125,6 +125,32 @@ body {
 .pill.fired { color: var(--red); border-color: var(--red); }
 .indent { margin-left: 26px; }
 
+/* ---------- Org-Chart (Baum) ---------- */
+.tree, .tree ul { list-style: none; margin: 0; padding: 0; }
+.tree { display: flex; justify-content: center; overflow-x: auto; padding: 8px; }
+.tree ul { display: flex; justify-content: center; }
+.tree li { display: flex; flex-direction: column; align-items: center; padding: 20px 8px 0; position: relative; }
+.tree li::before, .tree li::after {
+  content: ''; position: absolute; top: 0; height: 20px; width: 50%; border-top: 2px solid var(--border);
+}
+.tree li::before { left: 0; }
+.tree li::after { right: 0; border-left: 2px solid var(--border); }
+.tree li:only-child::before, .tree li:only-child::after { display: none; }
+.tree li:first-child::before, .tree li:last-child::after { border: 0; }
+.tree li:last-child::before { border-right: 2px solid var(--border); }
+.tree > li { padding-top: 0; }
+.node {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 9px 11px; min-width: 150px; box-shadow: var(--shadow); position: relative;
+  display: flex; align-items: center; gap: 8px; cursor: default;
+}
+.node::before {
+  content: ''; position: absolute; top: -20px; left: 50%; height: 20px; border-left: 2px solid var(--border);
+}
+.tree > li > .node::before { display: none; }
+.node b { font-size: 13px; }
+.node small { color: var(--text-dim); display: block; font-size: 11px; }
+
 /* ---------- Rating-Donut ---------- */
 .donut { --p: 0; width: 44px; height: 44px; border-radius: 50%;
   background: conic-gradient(var(--green) calc(var(--p)*1%), var(--border) 0);

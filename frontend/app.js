@@ -12,7 +12,7 @@ let selectedAgent = null; // null = Chef-Inbox (an Nutzer)
 
 const root = document.getElementById("view-root");
 const titleEl = document.getElementById("view-title");
-const TITLES = { dashboard: "Dashboard", inbox: "Inbox", assistant: "Daily-Assistent", projects: "Projekte", progress: "Fortschritt", org: "Team / Organisation", tasks: "Aufgaben", workshop: "Werkstatt", cookbook: "Cookbook / Regelwerk", skills: "Skills & MCP", approvals: "Freigaben", activity: "Aktivität", users: "Nutzer & Teilen", settings: "Einstellungen" };
+const TITLES = { dashboard: "Dashboard", inbox: "Inbox", assistant: "Daily-Assistent", projects: "Projekte", progress: "Fortschritt", org: "Team / Organisation", tasks: "Aufgaben", workshop: "Werkstatt", cookbook: "Cookbook / Regelwerk", knowledge: "Wissensspeicher", skills: "Skills & MCP", approvals: "Freigaben", activity: "Aktivität", users: "Nutzer & Teilen", settings: "Einstellungen" };
 let wsProject = null;
 let progProject = "";
 
@@ -66,6 +66,7 @@ async function render() {
   if (currentView === "tasks") return renderTasks();
   if (currentView === "workshop") return renderWorkshop();
   if (currentView === "cookbook") return renderCookbook();
+  if (currentView === "knowledge") return renderKnowledge();
   if (currentView === "skills") return renderSkills();
   if (currentView === "users") return renderUsers();
   if (currentView === "approvals") return renderApprovals();
@@ -250,7 +251,8 @@ async function renderInbox() {
         <select id="req-type"><option value="project">Projekt (eigenes Team)</option><option value="quick">Einzelaufgabe (kein Projekt)</option></select>
         <input id="req-title" placeholder="Was möchtest du? (Titel)" />
         <textarea id="req-desc" placeholder="Beschreibe Wunsch, Ziel, Termin/Frist, Details …"></textarea>
-        <button class="btn" id="req-send"><i data-lucide="rocket"></i> Auftrag senden</button>
+        <div class="row"><button class="btn" id="req-send"><i data-lucide="rocket"></i> Auftrag senden</button>
+          <button class="btn ghost" id="req-mic" title="Diktieren"><i data-lucide="mic"></i></button></div>
       </div>
       <div class="card">
         <h3><i data-lucide="messages-square"></i> Konversation</h3>
@@ -276,6 +278,18 @@ async function renderInbox() {
     document.getElementById("req-title").value = ""; document.getElementById("req-desc").value = "";
     selectedAgent = ""; loadThread();
   };
+  const mic = document.getElementById("req-mic");
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (mic) {
+    if (!SR) { mic.disabled = true; mic.title = "Spracheingabe vom Browser nicht unterstützt"; }
+    else mic.onclick = () => {
+      const rec = new SR(); rec.lang = "de-DE"; rec.interimResults = false;
+      mic.innerHTML = '<i data-lucide="mic" style="color:var(--red)"></i>'; icons();
+      rec.onresult = (e) => { const t = e.results[0][0].transcript; const d = document.getElementById("req-desc"); d.value = (d.value ? d.value + " " : "") + t; };
+      rec.onend = () => { mic.innerHTML = '<i data-lucide="mic"></i>'; icons(); };
+      rec.start();
+    };
+  }
   document.getElementById("inbox-pick").onchange = e => { selectedAgent = e.target.value; loadThread(); };
   document.getElementById("reply-send").onclick = async () => {
     const body = document.getElementById("reply-body").value.trim();
@@ -321,6 +335,16 @@ async function renderOrg() {
   const byManager = {};
   agentsCache.forEach(a => { (byManager[a.manager_id] = byManager[a.manager_id] || []).push(a); });
 
+  const employed = agentsCache.filter(a => a.status === "employed");
+  function node(a) {
+    const r = a.rating;
+    const kids = employed.filter(c => c.manager_id === a.id);
+    return `<li><div class="node" onclick="openAgent(${a.id})" style="cursor:pointer">
+        <div class="avatar role-${a.role}" style="width:30px;height:30px">${initials(a.name)}</div>
+        <div><b>${esc(a.name)}</b><small>${esc(a.title)} · ${r ?? '–'}★${a.stuck ? ' · ⚠️' : ''}</small></div>
+      </div>${kids.length ? `<ul>${kids.map(node).join("")}</ul>` : ""}</li>`;
+  }
+  // Einfache Liste als Fallback + Baum
   function row(a, depth) {
     const r = a.rating; const p = r ? (r / 5) * 100 : 0;
     return `<div class="agent-row ${depth ? "indent" : ""}" style="margin-left:${depth * 26}px">
@@ -333,7 +357,10 @@ async function renderOrg() {
     </div>` + (byManager[a.id] || []).map(c => row(c, depth + 1)).join("");
   }
   const chef = agentsCache.find(a => a.role === "ceo");
-  root.innerHTML = `<div class="card"><h3><i data-lucide="network"></i> Organigramm</h3>${chef ? row(chef, 0) : `<div class="empty">Kein Chef.</div>`}</div>
+  root.innerHTML = `<div class="card"><h3><i data-lucide="network"></i> Organigramm</h3>
+      ${chef ? `<ul class="tree">${node(chef)}</ul>` : `<div class="empty">Kein Chef.</div>`}</div>
+    <div class="card" style="margin-top:14px"><h3><i data-lucide="list"></i> Team (Liste & Bewertung)</h3>
+      ${chef ? row(chef, 0) : ''}</div>
     <div id="agent-detail"></div>`;
   icons();
 }
@@ -395,6 +422,7 @@ async function renderWorkshop() {
         <input type="file" id="ws-upload" class="hidden"/>
         <button class="btn ghost sm" id="ws-up"><i data-lucide="upload"></i> Hochladen</button>
         <button class="btn ghost sm" id="ws-zip"><i data-lucide="download"></i> ZIP</button>
+        <button class="btn ghost sm" id="ws-preview"><i data-lucide="play-circle"></i> Vorschau</button>
         <button class="btn ghost sm" id="ws-reset"><i data-lucide="trash-2"></i> leeren</button>
         <select id="ws-proj" style="width:auto;margin:0">${opts || '<option>kein Projekt</option>'}</select></div>
     </div>
@@ -427,6 +455,12 @@ async function renderWorkshop() {
   document.getElementById("ws-zip").onclick = () => {
     window.open("/api/workspace/zip?project_id=" + (wsProject || ""), "_blank");
   };
+  document.getElementById("ws-preview").onclick = async () => {
+    const cmd = prompt("Live-Vorschau starten. Befehl (leer = statischer Server für HTML/CSS/JS):\nz. B. 'npm run dev -- --port 8090' oder leer", "");
+    const r = await api.post("/api/preview/start", { project_id: wsProject ? Number(wsProject) : null, cmd: cmd || "" });
+    if (r.ok) { setTimeout(() => window.open(r.url, "_blank"), 1200); }
+    else alert("Vorschau fehlgeschlagen: " + (r.error || ""));
+  };
   api.get("/api/sandbox/status").then(st => {
     const el = document.getElementById("ws-sandbox"); if (!el) return;
     if (st.enabled && st.reachable) el.innerHTML = `<span style="color:var(--green)">● Build-Container aktiv</span>`;
@@ -446,6 +480,7 @@ async function loadWorkshop() {
       <i data-lucide="file" style="width:16px"></i>
       <div class="info" style="cursor:pointer" onclick="viewFile('${encodeURIComponent(f.path)}')"><b style="font-size:13px">${esc(f.path)}</b></div>
       <span class="tag">${f.size} B</span>
+      ${/\.html?$/.test(f.path) ? `<a class="btn ghost sm" href="/api/workspace/download?project_id=${wsProject || ''}&path=${encodeURIComponent(f.path)}&inline=1" target="_blank" title="Vorschau"><i data-lucide="eye"></i></a>` : ''}
       <a class="btn ghost sm" href="/api/workspace/download?project_id=${wsProject || ''}&path=${encodeURIComponent(f.path)}" download><i data-lucide="download"></i></a>
     </div>`).join("") : `<div class="muted">Noch keine Dateien. Entwickler-Agenten legen hier Dateien an, oder lade selbst welche hoch.</div>`;
   const git = await api.get("/api/git/history?project_id=" + wsProject);
@@ -600,6 +635,59 @@ window.msDone = async (id) => { await api.put("/api/milestones/" + id, { status:
 window.msDel = async (id) => { await fetch("/api/milestones/" + id, { method: "DELETE" }); loadProgress(); };
 window.msDue = async (id, val) => { await api.put("/api/milestones/" + id, { due_date: val || null }); loadProgress(); };
 
+// ---------- Wissensspeicher ----------
+async function renderKnowledge() {
+  const docs = await api.get("/api/knowledge");
+  root.innerHTML = `
+    <div class="card" style="margin-bottom:14px"><h3><i data-lucide="brain"></i> Wissen hinzufügen</h3>
+      <input id="kn-title" placeholder="Titel (z. B. Markenrichtlinie, API-Doku)"/>
+      <textarea id="kn-content" placeholder="Inhalt/Notiz, den die Agenten durchsuchen können …"></textarea>
+      <div class="row"><button class="btn" id="kn-add"><i data-lucide="plus"></i> Speichern</button>
+        <button class="btn ghost" id="kn-up"><i data-lucide="upload"></i> Datei hochladen (txt/md/code)</button>
+        <button class="btn ghost" id="kn-reindex" title="Embeddings neu berechnen"><i data-lucide="sparkles"></i> Vektor-Index</button>
+        <input type="file" id="kn-file" class="hidden"/></div>
+      <span class="muted" id="kn-idxstatus"></span>
+    </div>
+    <div class="card" style="margin-bottom:14px"><h3><i data-lucide="search"></i> Wissen durchsuchen</h3>
+      <div class="row"><input id="kn-q" placeholder="Suchbegriff …" style="margin:0" onkeydown="if(event.key==='Enter')knSearch()"/>
+        <button class="btn sm" onclick="knSearch()">suchen</button></div>
+      <div id="kn-results" style="margin-top:10px"></div>
+    </div>
+    <div class="card"><h3><i data-lucide="library"></i> Dokumente (${docs.length})</h3>
+      ${docs.length ? docs.map(d => `<div class="agent-row">
+        <div class="avatar role-planner"><i data-lucide="${d.source === 'upload' ? 'file' : 'sticky-note'}"></i></div>
+        <div class="info"><b>${esc(d.title)}</b><small>${d.chars} Zeichen · ${d.source}</small></div>
+        <button class="btn red sm" onclick="delDoc(${d.id})"><i data-lucide="trash-2"></i></button></div>`).join("")
+      : `<div class="muted">Noch kein Wissen. Agenten nutzen es per <code>search_memory</code> – plus alle früheren Entscheidungen.</div>`}
+    </div>`;
+  icons();
+  document.getElementById("kn-add").onclick = async () => {
+    const t = document.getElementById("kn-title").value.trim(); if (!t) return;
+    await api.post("/api/knowledge", { title: t, content: document.getElementById("kn-content").value });
+    renderKnowledge();
+  };
+  document.getElementById("kn-reindex").onclick = async () => {
+    document.getElementById("kn-idxstatus").textContent = "indexiere …";
+    const r = await api.post("/api/knowledge/reindex");
+    document.getElementById("kn-idxstatus").textContent = r.available ? `✓ Vektor-Suche aktiv (${r.indexed} Dok.)` : "Keine Embeddings verfügbar – Stichwortsuche (OpenAI-Key oder Ollama nutzen)";
+  };
+  document.getElementById("kn-up").onclick = () => document.getElementById("kn-file").click();
+  document.getElementById("kn-file").onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const fd = new FormData(); fd.append("file", f);
+    await fetch("/api/knowledge/upload", { method: "POST", body: fd });
+    renderKnowledge();
+  };
+}
+window.knSearch = async () => {
+  const q = document.getElementById("kn-q").value.trim();
+  const el = document.getElementById("kn-results");
+  if (!q) { el.innerHTML = ""; return; }
+  const r = await api.get("/api/knowledge/search?q=" + encodeURIComponent(q));
+  el.innerHTML = r.results.length ? r.results.map(h => `<div class="msg from-agent"><div class="subject">${esc(h.source)}</div><div class="body">${esc(h.snippet)}</div></div>`).join("") : `<div class="muted">Keine Treffer.</div>`;
+};
+window.delDoc = async (id) => { await fetch("/api/knowledge/" + id, { method: "DELETE" }); renderKnowledge(); };
+
 // ---------- Cookbook / Regelwerk ----------
 async function renderCookbook() {
   const rules = await api.get("/api/rules");
@@ -719,7 +807,7 @@ window.decide = async (id, d) => { await api.post(`/api/approvals/${id}/${d}`); 
 // ---------- Activity ----------
 async function renderActivity() {
   const evs = await api.get("/api/events");
-  const ic = { hire: "user-plus", fire: "user-minus", resign: "door-open", task: "list-checks", rating: "star", message: "mail", error: "alert-triangle", info: "info", milestone: "flag", deadline: "alarm-clock", mcp: "plug", file: "file", exec: "terminal", rule: "book", skill: "zap" };
+  const ic = { hire: "user-plus", fire: "user-minus", resign: "door-open", task: "list-checks", rating: "star", message: "mail", error: "alert-triangle", info: "info", milestone: "flag", deadline: "alarm-clock", mcp: "plug", file: "file", exec: "terminal", rule: "book", skill: "zap", git: "git-branch", audit: "shield", email: "send", loop: "rotate-cw" };
   root.innerHTML = `<div class="card"><h3><i data-lucide="activity"></i> Aktivitäts-Log</h3>
     ${evs.length ? evs.map(e => `<div class="agent-row"><div class="avatar" style="background:var(--panel-2);color:var(--text-dim)"><i data-lucide="${ic[e.kind] || "circle"}"></i></div>
       <div class="info"><b>${esc(e.text)}</b><small>${e.agent ? esc(e.agent) + " · " : ""}${new Date(e.created_at).toLocaleString("de-DE")}</small></div></div>`).join("") : `<div class="empty">Noch keine Aktivität.</div>`}</div>`;
@@ -731,6 +819,12 @@ async function renderSettings() {
   const s = await api.get("/api/settings");
   const sec = await api.get("/api/secrets");
   const bud = await api.get("/api/budget");
+  const recurring = await api.get("/api/recurring");
+  const hist = await api.get("/api/budget/history");
+  const twofa = CURRENT_USER && CURRENT_USER.totp_enabled;
+  const maxCost = Math.max(0.0001, ...hist.series.map(p => p.cost));
+  const chart = hist.series.length ? `<div class="row" style="align-items:flex-end;gap:3px;height:60px;margin-top:8px">` +
+    hist.series.map(p => `<div title="${p.date}: $${p.cost.toFixed(4)}" style="flex:1;background:var(--accent);height:${Math.max(2, Math.round(100 * p.cost / maxCost))}%"></div>`).join("") + `</div>` : "";
   const provOpts = (sel) => ["claude", "openai", "ollama"].map(p => `<option ${sel === p ? "selected" : ""} value="${p}">${p}${s.providers_available[p] ? "" : " (kein Key → Mock)"}</option>`).join("");
   const autoOpts = { full: "Voll autonom (keine Rückfragen)", ask_for_hiring: "Nachfragen bei Einstellung/Kündigung", ask_for_everything: "Bei allem Wichtigen nachfragen" };
   const schedOpts = { always: "Dauerbetrieb (immer)", window: "Nur in einem Zeitfenster", manual: "Nur manuell (auf Knopfdruck)" };
@@ -740,6 +834,26 @@ async function renderSettings() {
       <label>Neues Passwort (min. 6 Zeichen)</label><input id="pw-new" type="password" autocomplete="new-password"/>
       <button class="btn" id="pw-save"><i data-lucide="key"></i> Passwort ändern</button>
       <span class="muted" id="pw-status" style="margin-left:8px"></span>
+      <hr style="border-color:var(--border);margin:12px 0"/>
+      <div class="row"><b style="flex:1">Zwei-Faktor-Authentifizierung (2FA)</b>
+        <span class="pill ${twofa ? 'employed' : 'resigned'}">${twofa ? 'aktiv' : 'aus'}</span>
+        ${twofa ? `<button class="btn ghost sm" id="twofa-off">deaktivieren</button>`
+          : `<button class="btn ghost sm" id="twofa-on"><i data-lucide="shield"></i> einrichten</button>`}</div>
+      <div id="twofa-area"></div>
+    </div>
+    <div class="card" style="margin-bottom:14px"><h3><i data-lucide="repeat"></i> Wiederkehrende Aufträge</h3>
+      ${recurring.length ? recurring.map(j => `<div class="agent-row">
+        <div class="info"><b>${esc(j.title)}</b><small>${j.interval}${j.interval !== 'hourly' ? ' · ' + j.hour + ' Uhr' : ''}${j.as_project ? ' · Projekt' : ' · Einzelaufgabe'}</small></div>
+        <button class="btn red sm" onclick="delRecurring(${j.id})"><i data-lucide="trash-2"></i></button></div>`).join("") : `<div class="muted">keine</div>`}
+      <div class="row" style="margin-top:8px"><input id="rec-title" placeholder="Auftrag (z. B. Wochenreport)" style="margin:0"/>
+        <select id="rec-int" style="width:auto;margin:0"><option value="daily">täglich</option><option value="weekly">wöchentlich</option><option value="hourly">stündlich</option></select>
+        <button class="btn sm" id="rec-add" style="white-space:nowrap"><i data-lucide="plus"></i> anlegen</button></div>
+    </div>
+    <div class="card" style="margin-bottom:14px"><h3><i data-lucide="archive"></i> Sicherung (Backup)</h3>
+      <div class="row"><button class="btn ghost" id="bk-export"><i data-lucide="download"></i> Firma exportieren (JSON)</button>
+        <button class="btn ghost" id="bk-import"><i data-lucide="upload"></i> Regeln/Skills/MCP importieren</button>
+        <input type="file" id="bk-file" class="hidden" accept="application/json"/></div>
+      <div class="tag" style="margin-top:8px">Export ist ein vollständiger JSON-Snapshot. Import übernimmt Regeln, Skills und MCP-Server aus einem Export.</div>
     </div>
     <div class="card" style="margin-bottom:14px"><h3><i data-lucide="clock"></i> Zeitplan – wann die KI prüft & beobachtet</h3>
       <div class="grid cols-2" style="gap:10px">
@@ -764,7 +878,10 @@ async function renderSettings() {
       </select>
       <div class="row" style="margin-top:8px"><div class="toggle" id="s-verify"><div class="switch ${s.require_verification ? 'on' : ''}"></div> <b>Vor „fertig" verifizieren</b> (Entwickler/QA müssen testen – keine Regressionen)</div></div>
       <div class="row" style="margin-top:8px"><div class="toggle" id="s-incr"><div class="switch ${s.incremental_mode ? 'on' : ''}"></div> Kleine Teilschritte & minimaler Code (nicht alles auf einmal)</div></div>
-      <div class="tag" style="margin-top:8px">Ist „verifizieren" an, blockiert das System den Abschluss einer Entwickler-/QA-Aufgabe, bis ein Test/Smoke-Check erfolgreich lief.</div>
+      <div class="row" style="margin-top:8px"><div class="toggle" id="s-review"><div class="switch ${s.require_review ? 'on' : ''}"></div> 4-Augen-Prinzip: Entwicklerarbeit muss reviewt werden</div></div>
+      <div class="row" style="margin-top:8px"><div class="toggle" id="s-risk"><div class="switch ${s.risk_approval ? 'on' : ''}"></div> Riskante Befehle (rm -rf, push, deploy …) erst freigeben</div></div>
+      <div class="row" style="margin-top:8px"><div class="toggle" id="s-route"><div class="switch ${s.model_routing ? 'on' : ''}"></div> Modell-Routing: Entwickler/QA nutzen das stärkere (Chef-)Modell</div></div>
+      <div class="tag" style="margin-top:8px">Ist „verifizieren" an, blockiert das System den Abschluss einer Entwickler-/QA-Aufgabe, bis ein Test/Smoke-Check erfolgreich lief. Bei Provider-Fehlern wird automatisch ein anderer verfügbarer Anbieter genutzt.</div>
     </div>
     <div class="card" style="margin-bottom:14px"><h3><i data-lucide="wallet"></i> Budget & Kosten ${bud.paused ? '<span class="pill fired">pausiert</span>' : ''}</h3>
       <div class="row" style="gap:18px;margin-bottom:10px">
@@ -775,6 +892,7 @@ async function renderSettings() {
       ${bud.limit > 0 ? bar(Math.min(100, Math.round(100 * bud.spent / bud.limit)), bud.paused ? 'var(--red)' : 'var(--accent)') : ''}
       <label style="margin-top:10px">Budget-Limit in USD (0 = unbegrenzt) – bei Überschreitung pausiert die Firma automatisch</label>
       <input id="s-budget" type="number" min="0" step="1" value="${bud.limit}"/>
+      ${chart ? `<div class="stat-label" style="margin-top:8px">Verlauf (täglich)</div>${chart}` : ''}
       ${bud.by_model.length ? `<div class="stat-label" style="margin-top:6px">Je Modell</div>` + bud.by_model.map(m => `<div class="row"><small style="flex:1">${esc(m.model)}</small><small>$${m.cost.toFixed(4)}</small></div>`).join("") : ''}
       <div class="tag" style="margin-top:8px">Kosten sind Schätzungen (lokale Modelle = $0). Budget erhöhen hebt eine Pausierung wieder auf.</div>
     </div>
@@ -835,7 +953,11 @@ async function renderSettings() {
       <div class="row" style="margin-top:8px"><div class="toggle" id="s-noq"><div class="switch ${s.notify_questions ? 'on' : ''}"></div> bei neuen Rückfragen</div></div>
       <hr style="border-color:var(--border);margin:12px 0"/>
       <div class="row"><div class="toggle" id="s-aimail"><div class="switch ${s.assistant_email_access ? 'on' : ''}"></div> <b>Daily-Assistent darf meine E-Mails lesen</b></div></div>
-      <div class="tag" style="margin-top:8px">Zugangsdaten (SMTP/IMAP) werden sicher über <code>.env</code> gesetzt, nicht hier gespeichert.</div>
+      <hr style="border-color:var(--border);margin:12px 0"/>
+      <div class="stat-label" style="margin-bottom:6px">Telegram (optional, für Benachrichtigungen)</div>
+      <input id="s-tgtoken" value="${esc(s.telegram_token || '')}" placeholder="Bot-Token"/>
+      <input id="s-tgchat" value="${esc(s.telegram_chat_id || '')}" placeholder="Chat-ID"/>
+      <div class="tag" style="margin-top:4px">Zugangsdaten (SMTP/IMAP) trägst du oben unter „Zugangsdaten" ein.</div>
     </div>
     <div class="card" style="margin-top:16px"><h3><i data-lucide="server"></i> Lokale Modelle (Ollama)</h3>
       <div class="row" style="margin-bottom:10px"><input id="ol-name" placeholder="Modell ziehen, z. B. llama3.1" style="margin:0"/>
@@ -850,7 +972,7 @@ async function renderSettings() {
     await api.post("/api/ollama/pull", { name: n }); loadOllama();
   };
   const toggles = {};
-  ["s-run", "s-hire", "s-fire", "s-code", "s-verify", "s-incr", "s-notif", "s-novd", "s-noq", "s-aimail"].forEach(id => {
+  ["s-run", "s-hire", "s-fire", "s-code", "s-verify", "s-incr", "s-review", "s-risk", "s-route", "s-notif", "s-novd", "s-noq", "s-aimail"].forEach(id => {
     const el = document.getElementById(id);
     toggles[id] = el.querySelector(".switch").classList.contains("on");
     el.onclick = () => { const sw = el.querySelector(".switch"); sw.classList.toggle("on"); toggles[id] = sw.classList.contains("on"); };
@@ -861,6 +983,36 @@ async function renderSettings() {
       body: JSON.stringify({ old_password: document.getElementById("pw-old").value, new_password: document.getElementById("pw-new").value }) });
     const d = await r.json().catch(() => ({}));
     document.getElementById("pw-status").textContent = r.status === 200 ? "✓ geändert" : ("✕ " + (d.detail || "Fehler"));
+  };
+  // 2FA
+  const t2on = document.getElementById("twofa-on");
+  if (t2on) t2on.onclick = async () => {
+    const r = await api.post("/api/auth/2fa/setup");
+    document.getElementById("twofa-area").innerHTML = `<div class="tag" style="margin-top:8px">In der Authenticator-App eintragen (oder Schlüssel <b>${esc(r.secret)}</b>):<br><code>${esc(r.otpauth)}</code></div>
+      <div class="row" style="margin-top:8px"><input id="twofa-code" placeholder="6-stelliger Code" style="margin:0"/>
+        <button class="btn sm" id="twofa-confirm">aktivieren</button></div>`;
+    document.getElementById("twofa-confirm").onclick = async () => {
+      const rr = await fetch("/api/auth/2fa/enable", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: document.getElementById("twofa-code").value }) });
+      if (rr.status === 200) { alert("2FA aktiviert."); const m = await checkAuth(); CURRENT_USER = m; renderSettings(); }
+      else alert("Code falsch.");
+    };
+  };
+  const t2off = document.getElementById("twofa-off");
+  if (t2off) t2off.onclick = async () => { await api.post("/api/auth/2fa/disable"); const m = await checkAuth(); CURRENT_USER = m; renderSettings(); };
+  // Wiederkehrende Aufträge
+  document.getElementById("rec-add").onclick = async () => {
+    const t = document.getElementById("rec-title").value.trim(); if (!t) return;
+    await api.post("/api/recurring", { title: t, interval: document.getElementById("rec-int").value });
+    renderSettings();
+  };
+  // Backup
+  document.getElementById("bk-export").onclick = () => window.open("/api/backup/export", "_blank");
+  document.getElementById("bk-import").onclick = () => document.getElementById("bk-file").click();
+  document.getElementById("bk-file").onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const data = JSON.parse(await f.text());
+    await api.post("/api/backup/import-config", { rules: data.rules || [], skills: data.skills || [], mcp: data.mcp || [] });
+    alert("Importiert."); renderSettings();
   };
   // Zugangsdaten speichern (nur ausgefüllte Felder)
   document.getElementById("sec-save").onclick = async () => {
@@ -891,6 +1043,7 @@ async function renderSettings() {
       enable_code_exec: toggles["s-code"],
       thinking_mode: document.getElementById("s-think").value,
       require_verification: toggles["s-verify"], incremental_mode: toggles["s-incr"],
+      require_review: toggles["s-review"], risk_approval: toggles["s-risk"], model_routing: toggles["s-route"],
       budget_limit: parseFloat(document.getElementById("s-budget").value || "0"),
       schedule_mode: document.getElementById("s-sched").value,
       tick_seconds: parseFloat(document.getElementById("s-tick").value),
@@ -899,6 +1052,7 @@ async function renderSettings() {
       user_email: document.getElementById("s-uemail").value,
       email_notifications: toggles["s-notif"], notify_overdue: toggles["s-novd"],
       notify_questions: toggles["s-noq"], assistant_email_access: toggles["s-aimail"],
+      telegram_token: document.getElementById("s-tgtoken").value, telegram_chat_id: document.getElementById("s-tgchat").value,
       default_chef_provider: document.getElementById("s-cp").value, default_chef_model: document.getElementById("s-cm").value,
       default_worker_provider: document.getElementById("s-wp").value, default_worker_model: document.getElementById("s-wm").value,
       allowed_providers: document.getElementById("s-allowed").value,
@@ -984,12 +1138,26 @@ async function renderAuthScreen() {
 window.doAuth = async (setup) => {
   const username = document.getElementById("au-user").value.trim();
   const password = document.getElementById("au-pass").value;
+  const codeEl = document.getElementById("au-code");
+  const code = codeEl ? codeEl.value.trim() : undefined;
   const err = document.getElementById("au-err");
   const r = await fetch(setup ? "/api/auth/setup" : "/api/auth/login", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password }) });
-  if (r.status === 200) { location.reload(); }
-  else { const d = await r.json().catch(() => ({})); err.style.display = "block"; err.textContent = d.detail || d.error || "Fehlgeschlagen"; }
+    body: JSON.stringify({ username, password, code }) });
+  if (r.status === 200) { location.reload(); return; }
+  const d = await r.json().catch(() => ({}));
+  if (d.detail === "2fa") {
+    err.style.display = "none";
+    if (!document.getElementById("au-code")) {
+      const inp = document.createElement("input");
+      inp.id = "au-code"; inp.placeholder = "2FA-Code (6-stellig)"; inp.autocomplete = "one-time-code";
+      inp.onkeydown = (e) => { if (e.key === "Enter") doAuth(setup); };
+      document.getElementById("au-pass").after(inp);
+      inp.focus();
+    } else { err.style.display = "block"; err.textContent = "Code falsch"; }
+    return;
+  }
+  err.style.display = "block"; err.textContent = d.detail || d.error || "Fehlgeschlagen";
 };
 
 function setupHeader(me) {
@@ -1054,6 +1222,7 @@ async function renderUsers() {
 }
 window.shareWith = async (username) => { await api.post("/api/access", { username }); renderUsers(); };
 window.unshare = async (uid) => { await fetch("/api/access/" + uid, { method: "DELETE" }); renderUsers(); };
+window.delRecurring = async (id) => { await fetch("/api/recurring/" + id, { method: "DELETE" }); renderSettings(); };
 window.resetPw = async (uid, name) => {
   const pw = prompt("Neues Passwort für " + name + " (min. 6 Zeichen):");
   if (!pw) return;

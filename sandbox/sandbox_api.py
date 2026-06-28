@@ -96,6 +96,38 @@ def install(i: InstallIn):
         return {"ok": False, "stderr": str(ex)}
 
 
+class ServeIn(BaseModel):
+    rel: str = ""
+    cmd: str = ""
+    port: int = 8090
+
+
+_preview = {"proc": None}
+
+
+@app.post("/serve")
+def serve(s: ServeIn):
+    """Startet einen (Dev-)Server im Projektordner als Hintergrundprozess für die Live-Vorschau."""
+    if _preview["proc"] and _preview["proc"].poll() is None:
+        _preview["proc"].terminate()
+    cwd = _safe(s.rel)
+    os.makedirs(cwd, exist_ok=True)
+    cmd = s.cmd or f"python -m http.server {s.port} --bind 0.0.0.0"
+    try:
+        _preview["proc"] = subprocess.Popen(cmd, shell=True, cwd=cwd)
+        return {"ok": True, "port": s.port, "cmd": cmd}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "stderr": str(e)}
+
+
+@app.post("/serve/stop")
+def serve_stop():
+    if _preview["proc"] and _preview["proc"].poll() is None:
+        _preview["proc"].terminate()
+    _preview["proc"] = None
+    return {"ok": True}
+
+
 @app.post("/reset")
 def reset(r: ResetIn):
     """Löscht Inhalte innerhalb des Workspace (Software/Builds wieder entfernen)."""
