@@ -29,10 +29,19 @@ document.querySelectorAll(".nav-item").forEach(el => {
   });
 });
 
-// ---------- Theme ----------
+// ---------- Theme (mit Speicherung) ----------
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  const tog = document.getElementById("theme-toggle");
+  tog.innerHTML = t === "dark"
+    ? '<i data-lucide="moon"></i><span>Dunkel</span>'
+    : '<i data-lucide="sun"></i><span>Hell</span>';
+  icons();
+  localStorage.setItem("aihub-theme", t);
+}
+applyTheme(localStorage.getItem("aihub-theme") || "dark");
 document.getElementById("theme-toggle").addEventListener("click", () => {
-  const html = document.documentElement;
-  html.dataset.theme = html.dataset.theme === "dark" ? "light" : "dark";
+  applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
 });
 
 // ---------- Render-Dispatcher ----------
