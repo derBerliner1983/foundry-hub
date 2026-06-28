@@ -48,10 +48,18 @@ def ensure_seed(db, tenant_id: int = 1):
         db.commit()
 
     if db.query(Rule).filter(Rule.tenant_id == tenant_id).count() == 0:
-        db.add(Rule(tenant_id=tenant_id, title="Lieferstandard",
-                    content="Jedes Ergebnis enthält: kurze Zusammenfassung, das eigentliche "
-                            "Resultat und einen klaren nächsten Schritt. Keine Floskeln.",
-                    scope="global", source="user", active=True))
+        db.add_all([
+            Rule(tenant_id=tenant_id, title="Lieferstandard",
+                 content="Jedes Ergebnis enthält: kurze Zusammenfassung, das eigentliche "
+                         "Resultat und einen klaren nächsten Schritt. Keine Floskeln.",
+                 scope="global", source="user", active=True),
+            Rule(tenant_id=tenant_id, title="Erst denken, dann arbeiten – nichts kaputt machen",
+                 content="Zuerst nachdenken und in kleine Teilschritte zerlegen. Pro Schritt nur "
+                         "eine kleine, in sich abgeschlossene Änderung. Code so leicht wie möglich, "
+                         "aber so vollständig wie nötig. Vor 'erledigt' testen/smoke-checken und "
+                         "sicherstellen, dass bestehende Funktionen weiter laufen (keine Regression).",
+                 scope="global", source="user", active=True),
+        ])
         db.commit()
 
     if db.query(McpServer).filter(McpServer.tenant_id == tenant_id).count() == 0:

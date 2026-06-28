@@ -258,6 +258,19 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
         elif atype == "complete_task":
             tid = act.get("task_id")
             task = current_task if tid in ("current", None) else db.get(Task, _as_int(tid))
+            # Regressions-Schutz: Entwickler/QA müssen vorher verifizieren
+            if task and settings.require_verification and agent.role in ("developer", "qa") \
+                    and not task.verified:
+                log(db, "info", f"{agent.name}: Abschluss blockiert – erst verifizieren "
+                    f"(Tests/Smoke-Check)", agent_id=agent.id)
+                send_message(db, sender_kind="system", sender_agent_id=None,
+                             recipient_kind="agent", recipient_agent_id=agent.id,
+                             subject="Bitte erst verifizieren",
+                             body=f"Bevor '{task.title}' als erledigt gilt: führe mit run_command "
+                                  "die Tests/einen Smoke-Check aus und stelle sicher, dass nichts "
+                                  "Bestehendes kaputtgeht. Danach erneut abschließen.",
+                             project_id=pctx)
+                task = None  # nicht abschließen
             if task:
                 task.status = "done"
                 task.result = act.get("result", "")
@@ -507,6 +520,8 @@ def _do_run_command(db, agent, settings, act, current_task, pctx=None):
     res = workspace.run_command(pctx, cmd)
     if current_task:
         current_task.exec_count = (current_task.exec_count or 0) + 1
+        if res["ok"]:  # erfolgreicher Test/Smoke-Check -> Aufgabe gilt als verifiziert
+            current_task.verified = True
     status = "ok" if res["ok"] else f"Fehler ({res['code']})"
     out = (res["stdout"] + ("\n" + res["stderr"] if res["stderr"] else ""))[:1500]
     log(db, "exec", f"$ {cmd}  → {status}\n{out}", agent_id=agent.id)

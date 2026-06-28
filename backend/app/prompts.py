@@ -58,6 +58,21 @@ def build_system_prompt(agent, settings, team_summary: str,
         "ask_for_everything": "Wichtige Schritte solltest du vom Nutzer freigeben lassen.",
     }.get(settings.autonomy_level, "")
 
+    # Arbeitsweise: Denkmodus, Verifikation, Schrittgröße
+    tm = getattr(settings, "thinking_mode", "think")
+    work = ["ARBEITSWEISE:"]
+    if tm == "deep":
+        work.append("- Denke ZUERST gründlich nach (in 'thoughts'): Ziel, Annahmen, Plan in kleinen Schritten, Risiken.")
+        work.append("- Recherchiere bei Unklarheit zuerst (web_search/fetch_url, vorhandenen Code mit read_file lesen), BEVOR du etwas änderst.")
+    elif tm == "think":
+        work.append("- Denke ZUERST nach (in 'thoughts'): Ziel und ein kurzer Plan in kleinen Schritten. Erst dann handeln.")
+    if getattr(settings, "incremental_mode", True):
+        work.append("- Mache pro Runde nur EINEN kleinen, in sich abgeschlossenen Teilschritt – nicht alles auf einmal.")
+        work.append("- Code so LEICHT wie möglich, aber so VOLLSTÄNDIG wie nötig. Keine unnötige Komplexität.")
+    if getattr(settings, "require_verification", True):
+        work.append("- Bevor du eine Aufgabe als erledigt meldest: führe Tests/einen Smoke-Check mit run_command aus und stelle sicher, dass NICHTS Bestehendes kaputtgeht. Bricht etwas, behebe es zuerst.")
+    work_block = ("\n" + "\n".join(work) + "\n") if len(work) > 1 else ""
+
     rules_block = f"\nREGELWERK / STANDARDS (verbindlich einhalten):\n{rules_text}\n" if rules_text else ""
     skills_block = f"\nVERFÜGBARE SKILLS (mit use_skill nutzbar):\n{skills_text}\n" if skills_text else ""
     mcp_block = f"\nVERFÜGBARE MCP-WERKZEUGE (Server, die du anfragen kannst):\n{mcp_text}\n" if mcp_text else ""
@@ -75,6 +90,6 @@ add_rule eine Regel/einen Standard im Cookbook an.
 
 AKTUELLES TEAM:
 {team_summary}
-{rules_block}{skills_block}{mcp_block}
+{work_block}{rules_block}{skills_block}{mcp_block}
 {ACTION_SPEC}
 """

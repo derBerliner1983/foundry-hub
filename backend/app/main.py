@@ -226,6 +226,9 @@ class SettingsUpdate(BaseModel):
     require_approval_fire: bool | None = None
     fire_threshold: float | None = None
     enable_code_exec: bool | None = None
+    thinking_mode: str | None = None
+    require_verification: bool | None = None
+    incremental_mode: bool | None = None
     schedule_mode: str | None = None
     active_from: int | None = None
     active_to: int | None = None
@@ -740,6 +743,9 @@ def get_settings():
             "require_approval_fire": s.require_approval_fire,
             "fire_threshold": s.fire_threshold,
             "enable_code_exec": s.enable_code_exec,
+            "thinking_mode": s.thinking_mode,
+            "require_verification": s.require_verification,
+            "incremental_mode": s.incremental_mode,
             "schedule_mode": s.schedule_mode,
             "active_from": s.active_from,
             "active_to": s.active_to,

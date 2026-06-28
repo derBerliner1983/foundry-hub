@@ -233,6 +233,24 @@ wurde was gemacht":
   **Auslöser**. So ist jederzeit nachvollziehbar, *warum* ein Agent etwas getan
   hat – nicht nur *dass* es passiert ist (das zeigt zusätzlich die Aktivität).
 
+### Arbeitsweise – erst denken, dann arbeiten (keine Regressionen)
+
+Unter *Einstellungen → Arbeitsweise* steuerst du, **wie** die Agenten vorgehen:
+
+- **Denkmodus**: *Aus* (sofort handeln), *Nachdenken* (erst Ziel + kleiner Plan in
+  `thoughts`, dann handeln) oder *Tiefenrecherche* (erst recherchieren/Code lesen –
+  `web_search`/`fetch_url`/`read_file` –, dann ändern).
+- **Vor „fertig" verifizieren** *(empfohlen, an)*: Entwickler-/QA-Agenten können
+  eine Aufgabe **erst abschließen, wenn ein Test/Smoke-Check erfolgreich lief**. So
+  wird verhindert, dass „eins geht, das andere aber nicht mehr" – der Abschluss
+  wird sonst blockiert und der Agent zum Nachbessern aufgefordert.
+- **Kleine Teilschritte & minimaler Code**: pro Runde nur **ein** kleiner, in sich
+  abgeschlossener Schritt; Code **so leicht wie möglich, aber so vollständig wie
+  nötig** – nicht alles auf einmal.
+
+Diese Vorgaben fließen in die System-Prompts ein; zusätzlich liegt eine passende
+Regel im **Cookbook** (editierbar).
+
 ### Zeitplan – wann die KI prüft & beobachtet
 
 Unter *Einstellungen → Zeitplan* legst du fest, **wann** die Agenten aktiv werden:

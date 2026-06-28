@@ -713,6 +713,17 @@ async function renderSettings() {
       <div class="row"><button class="btn" id="s-runnow"><i data-lucide="play"></i> Jetzt prüfen</button>
         <span class="muted" id="run-info"></span></div>
     </div>
+    <div class="card" style="margin-bottom:14px"><h3><i data-lucide="brain-circuit"></i> Arbeitsweise – erst denken, dann arbeiten</h3>
+      <label>Denkmodus</label>
+      <select id="s-think">
+        <option value="off" ${s.thinking_mode === 'off' ? 'selected' : ''}>Aus (sofort handeln)</option>
+        <option value="think" ${s.thinking_mode === 'think' ? 'selected' : ''}>Nachdenken (Plan vor dem Handeln)</option>
+        <option value="deep" ${s.thinking_mode === 'deep' ? 'selected' : ''}>Tiefenrecherche (erst recherchieren/lesen, dann handeln)</option>
+      </select>
+      <div class="row" style="margin-top:8px"><div class="toggle" id="s-verify"><div class="switch ${s.require_verification ? 'on' : ''}"></div> <b>Vor „fertig" verifizieren</b> (Entwickler/QA müssen testen – keine Regressionen)</div></div>
+      <div class="row" style="margin-top:8px"><div class="toggle" id="s-incr"><div class="switch ${s.incremental_mode ? 'on' : ''}"></div> Kleine Teilschritte & minimaler Code (nicht alles auf einmal)</div></div>
+      <div class="tag" style="margin-top:8px">Ist „verifizieren" an, blockiert das System den Abschluss einer Entwickler-/QA-Aufgabe, bis ein Test/Smoke-Check erfolgreich lief.</div>
+    </div>
     <div class="grid cols-2">
       <div class="card"><h3><i data-lucide="sliders"></i> Autonomie & Freigaben</h3>
         <label>Autonomie-Stufe</label>
@@ -785,7 +796,7 @@ async function renderSettings() {
     await api.post("/api/ollama/pull", { name: n }); loadOllama();
   };
   const toggles = {};
-  ["s-run", "s-hire", "s-fire", "s-code", "s-notif", "s-novd", "s-noq", "s-aimail"].forEach(id => {
+  ["s-run", "s-hire", "s-fire", "s-code", "s-verify", "s-incr", "s-notif", "s-novd", "s-noq", "s-aimail"].forEach(id => {
     const el = document.getElementById(id);
     toggles[id] = el.querySelector(".switch").classList.contains("on");
     el.onclick = () => { const sw = el.querySelector(".switch"); sw.classList.toggle("on"); toggles[id] = sw.classList.contains("on"); };
@@ -817,6 +828,8 @@ async function renderSettings() {
       auto_run: toggles["s-run"], require_approval_hire: toggles["s-hire"], require_approval_fire: toggles["s-fire"],
       fire_threshold: parseFloat(document.getElementById("s-thresh").value),
       enable_code_exec: toggles["s-code"],
+      thinking_mode: document.getElementById("s-think").value,
+      require_verification: toggles["s-verify"], incremental_mode: toggles["s-incr"],
       schedule_mode: document.getElementById("s-sched").value,
       tick_seconds: parseFloat(document.getElementById("s-tick").value),
       active_from: parseInt(document.getElementById("s-from").value || "0"),

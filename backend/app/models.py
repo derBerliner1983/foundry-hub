@@ -80,6 +80,10 @@ class Settings(Base):
     active_from = Column(Integer, default=0)           # Stunde 0..23 (Fenster-Start)
     active_to = Column(Integer, default=24)            # Stunde 0..24 (Fenster-Ende)
     tick_seconds = Column(Float, default=4.0)          # Takt des Orchestrators
+    # Arbeitsweise der Agenten
+    thinking_mode = Column(String, default="think")    # off | think | deep
+    require_verification = Column(Boolean, default=True)  # erst prüfen, dann "fertig"
+    incremental_mode = Column(Boolean, default=True)   # kleine Teilschritte, minimaler Code
     # E-Mail
     user_email = Column(String, default="")            # Adresse für Benachrichtigungen
     email_notifications = Column(Boolean, default=False)
@@ -134,6 +138,7 @@ class Task(Base):
     status = Column(String, default="todo")  # todo | in_progress | done | failed
     result = Column(Text, default="")
     exec_count = Column(Integer, default=0)  # Anzahl ausgeführter Befehle (Limit)
+    verified = Column(Boolean, default=False)  # erfolgreicher Test/Smoke-Check gelaufen?
     created_at = Column(DateTime, default=now)
     updated_at = Column(DateTime, default=now, onupdate=now)
 
