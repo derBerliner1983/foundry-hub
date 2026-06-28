@@ -19,6 +19,7 @@ from .models import (
     Message,
     Milestone,
     PendingApproval,
+    Project,
     Rating,
     Rule,
     Settings,
@@ -59,6 +60,15 @@ def maybe_notify(db, kind, subject, body):
         return
     if kind == "overdue" and not s.notify_overdue:
         return
+    # Telegram (falls konfiguriert)
+    if s.telegram_token and s.telegram_chat_id:
+        try:
+            import httpx
+            httpx.post(f"https://api.telegram.org/bot{s.telegram_token}/sendMessage",
+                       json={"chat_id": s.telegram_chat_id, "text": f"[AI-Hub] {subject}\n{body}"},
+                       timeout=10)
+        except Exception:  # noqa: BLE001
+            pass
     to = s.user_email or config.NOTIFY_EMAIL or config.SMTP_FROM
     if not to or not email_util.smtp_configured():
         return
@@ -274,6 +284,20 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
                                   "Bestehendes kaputtgeht. Danach erneut abschließen.",
                              project_id=pctx)
                 task = None  # nicht abschließen
+            # 4-Augen-Prinzip: Entwicklerarbeit muss reviewt werden
+            if task and settings.require_review and agent.role == "developer" \
+                    and task.status != "review":
+                task.status = "review"
+                task.result = act.get("result", "")
+                log(db, "task", f"'{task.title}' wartet auf Review", agent_id=agent.id)
+                if agent.manager_id:
+                    send_message(db, sender_kind="system", sender_agent_id=None,
+                                 recipient_kind="agent", recipient_agent_id=agent.manager_id,
+                                 subject="🔍 Review nötig: " + task.title,
+                                 body=f"{agent.name} hat '{task.title}' fertiggestellt. Bitte prüfen "
+                                      "und mit complete_task freigeben (oder zurückweisen).",
+                                 project_id=pctx)
+                task = None  # erst nach Review erledigt
             if task:
                 task.status = "done"
                 task.result = act.get("result", "")
@@ -527,6 +551,17 @@ def _do_use_skill(db, agent, act, current_task, pctx):
                      subject=f"Skill: {name}", body=skill.instructions[:3000])
 
 
+import re as _re
+_RISKY = _re.compile(
+    r"(rm\s+-rf|mkfs|\bdd\b|shutdown|reboot|:\(\)\s*\{|sudo\b|git\s+push|npm\s+publish|"
+    r"curl[^|]*\|\s*(sh|bash)|wget[^|]*\|\s*(sh|bash)|drop\s+table|>\s*/dev/sd|chmod\s+-R\s+777)",
+    _re.IGNORECASE)
+
+
+def _is_risky(cmd: str) -> bool:
+    return bool(_RISKY.search(cmd or ""))
+
+
 def _do_run_command(db, agent, settings, act, current_task, pctx=None):
     if pctx is None:
         pctx = agent.project_id
@@ -537,6 +572,19 @@ def _do_run_command(db, agent, settings, act, current_task, pctx=None):
         log(db, "error", f"Befehlslimit ({config.MAX_EXEC_PER_TASK}) erreicht", agent_id=agent.id)
         return
     cmd = act.get("cmd") or act.get("command") or ""
+    # Riskante Befehle ggf. erst freigeben lassen
+    if settings.risk_approval and _is_risky(cmd):
+        import json as _json
+        ap = PendingApproval(action_json=_json.dumps({"type": "run_command", "cmd": cmd, "pctx": pctx}),
+                             requested_by_agent_id=agent.id,
+                             summary=f"{agent.name} möchte riskanten Befehl ausführen: {cmd[:80]}")
+        db.add(ap)
+        log(db, "info", f"Freigabe für Befehl angefragt: {cmd[:60]}", agent_id=agent.id)
+        send_message(db, sender_kind="agent", sender_agent_id=agent.id,
+                     recipient_kind="user", recipient_agent_id=None,
+                     subject="🔐 Freigabe: riskanter Befehl", body=ap.summary, requires_answer=True)
+        maybe_notify(db, "question", "Freigabe: riskanter Befehl", ap.summary)
+        return
     res = workspace.run_command(pctx, cmd)
     if current_task:
         current_task.exec_count = (current_task.exec_count or 0) + 1
@@ -738,9 +786,18 @@ async def run_agent_turn(db, agent: Agent):
                                  rules_text=rules_for(db, agent, project_ctx),
                                  skills_text=skills_text(db),
                                  mcp_text=mcp_text(db))
+    # Testbefehl des Projekts in den Kontext geben (Verifikation)
+    if project_ctx:
+        proj = db.get(Project, project_ctx)
+        if proj and proj.test_command:
+            context_lines.append(f"TESTBEFEHL dieses Projekts (für die Verifikation): {proj.test_command}")
     user_msg = "Bearbeite das Folgende und antworte als JSON:\n\n" + "\n".join(context_lines)
 
-    result = await providers.chat(agent.provider, agent.model, system,
+    # Modell-Routing: Entwickler/QA auf das stärkere (Chef-)Modell heben
+    prov, mod = agent.provider, agent.model
+    if settings.model_routing and agent.role in ("developer", "qa"):
+        prov, mod = settings.default_chef_provider, settings.default_chef_model
+    result = await providers.chat(prov, mod, system,
                                   [{"role": "user", "content": user_msg}])
     # Verbrauch/Kosten protokollieren
     cost = costs.estimate(result.model, result.input_tokens, result.output_tokens)
@@ -888,6 +945,40 @@ def _active_tenants(db, force=False, only_tenant=None) -> list:
         if force or (s.auto_run and within_schedule(s)):
             out.append(s.tenant_id)
     return out
+
+
+def run_recurring(db):
+    """Feuert fällige wiederkehrende Aufträge (Projekt/Einzelaufgabe an den Chef)."""
+    import datetime
+    from .models import RecurringJob
+    now_ = datetime.datetime.utcnow()
+    jobs = db.query(RecurringJob).filter(RecurringJob.enabled == True).all()  # noqa: E712
+    for j in jobs:
+        due = False
+        if j.interval == "hourly":
+            due = not j.last_run or (now_ - j.last_run).total_seconds() >= 3600
+        elif j.interval == "daily":
+            due = (now_.hour == (j.hour or 9)) and (not j.last_run or (now_ - j.last_run).total_seconds() >= 3600)
+        elif j.interval == "weekly":
+            due = (now_.weekday() == (j.weekday or 0)) and (now_.hour == (j.hour or 9)) and \
+                  (not j.last_run or (now_ - j.last_run).total_seconds() >= 3600 * 20)
+        if not due:
+            continue
+        context.set_tenant(j.tenant_id)
+        chef = db.query(Agent).filter(Agent.role == "ceo", Agent.tenant_id == j.tenant_id).first()
+        if not chef:
+            continue
+        pid = None
+        if j.as_project:
+            p = Project(tenant_id=j.tenant_id, title=j.title, description=j.description)
+            db.add(p); db.flush(); pid = p.id
+        send_message(db, sender_kind="user", sender_agent_id=None,
+                     recipient_kind="agent", recipient_agent_id=chef.id,
+                     subject=("Neues Projekt: " if j.as_project else "Einzelaufgabe: ") + j.title,
+                     body=j.description or j.title, project_id=pid)
+        j.last_run = now_
+        log(db, "info", f"Wiederkehrender Auftrag ausgelöst: {j.title}")
+    db.commit()
 
 
 async def tick(db, force=False, only_tenant=None):

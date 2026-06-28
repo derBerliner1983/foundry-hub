@@ -135,6 +135,7 @@ async def orchestrator_loop():
         try:
             db = SessionLocal()
             try:
+                orch.run_recurring(db)
                 await orch.tick(db)
                 s = orch.get_settings(db)
                 sleep_for = max(1.0, s.tick_seconds or config.TICK_INTERVAL_SECONDS)
@@ -225,6 +226,7 @@ class UserMessage(BaseModel):
 
 
 class SettingsUpdate(BaseModel):
+    model_config = {"protected_namespaces": ()}
     autonomy_level: str | None = None
     allowed_providers: str | None = None
     default_chef_provider: str | None = None
@@ -240,6 +242,11 @@ class SettingsUpdate(BaseModel):
     thinking_mode: str | None = None
     require_verification: bool | None = None
     incremental_mode: bool | None = None
+    model_routing: bool | None = None
+    require_review: bool | None = None
+    risk_approval: bool | None = None
+    telegram_token: str | None = None
+    telegram_chat_id: str | None = None
     schedule_mode: str | None = None
     active_from: int | None = None
     active_to: int | None = None
@@ -271,6 +278,7 @@ def health():
 class Credentials(BaseModel):
     username: str
     password: str
+    code: str | None = None
 
 
 class ShareIn(BaseModel):
@@ -313,13 +321,71 @@ def auth_setup(c: Credentials, request: Request, response: Response):
 
 @app.post("/api/auth/login")
 def auth_login(c: Credentials, request: Request, response: Response):
-    token, err = auth.login(c.username, c.password)
+    token, err = auth.login(c.username, c.password, c.code)
     if err == "locked":
         raise HTTPException(429, "Zu viele Fehlversuche – kurz warten und erneut versuchen")
+    if err == "2fa":
+        raise HTTPException(401, "2fa")  # Frontend fragt dann den 6-stelligen Code ab
     if not token:
         raise HTTPException(401, "Benutzername oder Passwort falsch")
     _set_cookie(response, token, request.url.scheme == "https")
     return {"ok": True}
+
+
+class TotpCode(BaseModel):
+    code: str
+
+
+@app.post("/api/auth/2fa/setup")
+def totp_setup(request: Request):
+    ctx = auth.current(request)
+    if not ctx:
+        raise HTTPException(401, "Nicht angemeldet")
+    from .models import User
+    db = SessionLocal()
+    try:
+        u = db.get(User, ctx["user_id"])
+        u.totp_secret = auth.gen_totp_secret()
+        u.totp_enabled = False
+        db.commit()
+        return {"secret": u.totp_secret, "otpauth": auth.otpauth_uri(u.username, u.totp_secret)}
+    finally:
+        db.close()
+
+
+@app.post("/api/auth/2fa/enable")
+def totp_enable(t: TotpCode, request: Request):
+    ctx = auth.current(request)
+    if not ctx:
+        raise HTTPException(401, "Nicht angemeldet")
+    from .models import User
+    db = SessionLocal()
+    try:
+        u = db.get(User, ctx["user_id"])
+        if not auth.totp_verify(u.totp_secret, t.code):
+            raise HTTPException(400, "Code falsch")
+        u.totp_enabled = True
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.post("/api/auth/2fa/disable")
+def totp_disable(request: Request):
+    ctx = auth.current(request)
+    if not ctx:
+        raise HTTPException(401, "Nicht angemeldet")
+    from .models import User
+    db = SessionLocal()
+    try:
+        u = db.get(User, ctx["user_id"])
+        u.totp_enabled = False
+        u.totp_secret = ""
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
 
 
 class PasswordChange(BaseModel):
@@ -374,8 +440,10 @@ def auth_me(request: Request):
             tenants.append({"tenant_id": tid,
                             "name": (owner.username + " (Firma)") if owner else f"Firma {tid}",
                             "own": tid == ctx["user_id"]})
+        me_user = db.get(User, ctx["user_id"])
         return {"user_id": ctx["user_id"], "username": ctx["username"],
                 "is_owner": ctx["is_owner"], "active_tenant": ctx["tenant_id"],
+                "totp_enabled": bool(me_user and me_user.totp_enabled),
                 "tenants": tenants}
     finally:
         db.close()
@@ -742,6 +810,10 @@ def decide_approval(approval_id: int, decision: str):
                 if target:
                     target.status = "fired"
                     orch.log(db, "fire", f"{target.name} gekündigt (freigegeben)", agent_id=target.id)
+            elif action.get("type") == "run_command":
+                res = workspace.run_command(action.get("pctx"), action.get("cmd", ""))
+                orch.log(db, "exec", f"$ {action.get('cmd','')} (freigegeben) → "
+                         f"{'ok' if res.get('ok') else 'Fehler'}")
         else:
             ap.status = "rejected"
         db.commit()
@@ -789,6 +861,11 @@ def get_settings():
             "thinking_mode": s.thinking_mode,
             "require_verification": s.require_verification,
             "incremental_mode": s.incremental_mode,
+            "model_routing": s.model_routing,
+            "require_review": s.require_review,
+            "risk_approval": s.risk_approval,
+            "telegram_token": s.telegram_token,
+            "telegram_chat_id": s.telegram_chat_id,
             "schedule_mode": s.schedule_mode,
             "active_from": s.active_from,
             "active_to": s.active_to,
@@ -1394,6 +1471,145 @@ async def mcp_call(mcp_id: int, call: McpCall):
         return {"ok": True, "text": mcp_client.result_to_text(result)}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)}
+
+
+# --------------------------------------------------------------------------- #
+# Wiederkehrende Aufträge, Kosten-Verlauf, Backup, Audit
+# --------------------------------------------------------------------------- #
+class RecurringIn(BaseModel):
+    title: str
+    description: str = ""
+    as_project: bool = False
+    interval: str = "daily"
+    hour: int = 9
+    weekday: int = 0
+    enabled: bool | None = None
+
+
+@app.get("/api/recurring")
+def list_recurring():
+    from .models import RecurringJob
+    db = SessionLocal()
+    try:
+        return [{"id": j.id, "title": j.title, "description": j.description,
+                 "as_project": j.as_project, "interval": j.interval, "hour": j.hour,
+                 "weekday": j.weekday, "enabled": j.enabled,
+                 "last_run": j.last_run.isoformat() if j.last_run else None}
+                for j in db.query(RecurringJob).filter(RecurringJob.tenant_id == context.tid())
+                .order_by(RecurringJob.id).all()]
+    finally:
+        db.close()
+
+
+@app.post("/api/recurring")
+def create_recurring(r: RecurringIn):
+    from .models import RecurringJob
+    db = SessionLocal()
+    try:
+        j = RecurringJob(title=r.title, description=r.description, as_project=r.as_project,
+                         interval=r.interval, hour=r.hour, weekday=r.weekday,
+                         enabled=True if r.enabled is None else r.enabled)
+        db.add(j)
+        db.commit()
+        return {"ok": True, "id": j.id}
+    finally:
+        db.close()
+
+
+@app.delete("/api/recurring/{job_id}")
+def delete_recurring(job_id: int):
+    from .models import RecurringJob
+    db = SessionLocal()
+    try:
+        j = db.get(RecurringJob, job_id)
+        if j and j.tenant_id == context.tid():
+            db.delete(j)
+            db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.get("/api/budget/history")
+def budget_history(days: int = 30):
+    """Tägliche Kosten der aktuellen Firma (für ein Diagramm)."""
+    from .models import Usage
+    db = SessionLocal()
+    try:
+        from datetime import datetime as _dt
+        rows = db.query(Usage).filter(Usage.tenant_id == context.tid()).all()
+        by_day = {}
+        for r in rows:
+            d = (r.created_at or _dt.utcnow()).date().isoformat()
+            by_day[d] = round(by_day.get(d, 0.0) + r.cost, 4)
+        series = [{"date": k, "cost": v} for k, v in sorted(by_day.items())][-days:]
+        return {"series": series}
+    finally:
+        db.close()
+
+
+@app.get("/api/backup/export")
+def backup_export(request: Request):
+    """Vollständiger JSON-Snapshot der aktuellen Firma (Backup)."""
+    from .models import (Agent as A, Project as P, Task as T, Milestone as Mi,
+                         Rule as Ru, Skill as Sk, McpServer as Mc, Settings as Se,
+                         Message as Me, Decision as De)
+    db = SessionLocal()
+    try:
+        t = context.tid()
+
+        def dump(model, cols):
+            return [{c: getattr(o, c) for c in cols}
+                    for o in db.query(model).filter(model.tenant_id == t).all()]
+        data = {
+            "tenant": t,
+            "settings": dump(Se, ["autonomy_level", "default_chef_provider", "default_chef_model",
+                                  "default_worker_provider", "default_worker_model", "thinking_mode",
+                                  "require_verification", "incremental_mode", "model_routing",
+                                  "require_review", "risk_approval", "budget_limit"]),
+            "agents": dump(A, ["id", "name", "role", "provider", "model", "status", "manager_id", "project_id"]),
+            "projects": dump(P, ["id", "title", "description", "status", "test_command"]),
+            "tasks": dump(T, ["id", "title", "description", "status", "project_id", "milestone_id"]),
+            "milestones": dump(Mi, ["id", "title", "status", "project_id", "order_index"]),
+            "rules": dump(Ru, ["title", "content", "scope", "role", "active"]),
+            "skills": dump(Sk, ["name", "description", "instructions", "command", "enabled"]),
+            "mcp": dump(Mc, ["name", "description", "transport", "command", "url", "enabled"]),
+        }
+        return data
+    finally:
+        db.close()
+
+
+class ConfigImport(BaseModel):
+    rules: list = []
+    skills: list = []
+    mcp: list = []
+
+
+@app.post("/api/backup/import-config")
+def backup_import_config(data: ConfigImport):
+    """Importiert Regeln/Skills/MCP-Server in die aktuelle Firma (z. B. aus einem Export)."""
+    from .models import Rule as Ru, Skill as Sk, McpServer as Mc
+    db = SessionLocal()
+    try:
+        for r in data.rules[:200]:
+            db.add(Ru(title=r.get("title", "Regel"), content=r.get("content", ""),
+                      scope=r.get("scope", "global"), role=r.get("role"),
+                      active=r.get("active", True), source="user"))
+        for s in data.skills[:200]:
+            if not db.query(Sk).filter(Sk.name == s.get("name"), Sk.tenant_id == context.tid()).first():
+                db.add(Sk(name=s.get("name"), description=s.get("description", ""),
+                          instructions=s.get("instructions", ""), command=s.get("command", ""),
+                          enabled=s.get("enabled", True)))
+        for m in data.mcp[:50]:
+            if not db.query(Mc).filter(Mc.name == m.get("name"), Mc.tenant_id == context.tid()).first():
+                db.add(Mc(name=m.get("name"), description=m.get("description", ""),
+                          transport=m.get("transport", "stdio"), command=m.get("command", ""),
+                          url=m.get("url", ""), enabled=m.get("enabled", True)))
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
 
 
 # --------------------------------------------------------------------------- #

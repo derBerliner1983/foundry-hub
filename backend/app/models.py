@@ -31,6 +31,8 @@ class User(Base):
     password_hash = Column(String, nullable=False)
     salt = Column(String, nullable=False)
     is_owner = Column(Boolean, default=False)
+    totp_secret = Column(String, default="")   # 2FA (Base32), leer = aus
+    totp_enabled = Column(Boolean, default=False)
     created_at = Column(DateTime, default=now)
 
 
@@ -87,6 +89,11 @@ class Settings(Base):
     thinking_mode = Column(String, default="think")    # off | think | deep
     require_verification = Column(Boolean, default=True)  # erst prüfen, dann "fertig"
     incremental_mode = Column(Boolean, default=True)   # kleine Teilschritte, minimaler Code
+    model_routing = Column(Boolean, default=False)     # Entwickler/QA auf stärkeres Modell
+    require_review = Column(Boolean, default=False)    # 4-Augen: Review vor "fertig"
+    risk_approval = Column(Boolean, default=True)      # riskante Aktionen freigeben lassen
+    telegram_token = Column(String, default="")        # optional: Telegram-Bot
+    telegram_chat_id = Column(String, default="")
     # E-Mail
     user_email = Column(String, default="")            # Adresse für Benachrichtigungen
     email_notifications = Column(Boolean, default=False)
@@ -103,6 +110,7 @@ class Project(Base):
     title = Column(String, nullable=False)
     description = Column(Text, default="")
     status = Column(String, default="active")  # active | done | cancelled
+    test_command = Column(String, default="")  # z. B. "pytest -q" für die Verifikation
     created_at = Column(DateTime, default=now)
 
 
@@ -288,6 +296,23 @@ class Usage(Base):
     input_tokens = Column(Integer, default=0)
     output_tokens = Column(Integer, default=0)
     cost = Column(Float, default=0.0)
+    created_at = Column(DateTime, default=now)
+
+
+class RecurringJob(Base):
+    """Wiederkehrender Auftrag (z. B. wöchentlicher Report)."""
+    __tablename__ = "recurring_jobs"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, default=_default_tenant, index=True)
+    title = Column(String, nullable=False)
+    description = Column(Text, default="")
+    as_project = Column(Boolean, default=False)   # Projekt statt Einzelaufgabe
+    interval = Column(String, default="daily")    # hourly | daily | weekly
+    hour = Column(Integer, default=9)
+    weekday = Column(Integer, default=0)          # 0=Mo (bei weekly)
+    enabled = Column(Boolean, default=True)
+    last_run = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=now)
 
 
