@@ -49,6 +49,32 @@ async def startup():
         db.close()
     asyncio.create_task(orchestrator_loop())
     asyncio.create_task(_startup_ollama())
+    asyncio.create_task(_startup_mcp())
+
+
+async def _startup_mcp():
+    """Verbindet sich beim Start best-effort mit allen aktiven MCP-Servern und cached deren Tools."""
+    db = SessionLocal()
+    try:
+        servers = [(m.id, m.transport, m.command, m.url, m.name)
+                   for m in db.query(McpServer).filter(McpServer.enabled == True).all()]  # noqa: E712
+    finally:
+        db.close()
+    for mid, transport, command, url, name in servers:
+        try:
+            tools = await mcp_client.list_tools(transport, command=command, url=url)
+            status, last_error, tj = "connected", "", json.dumps(tools)
+        except Exception as e:  # noqa: BLE001
+            status, last_error, tj = "error", str(e), "[]"
+        db = SessionLocal()
+        try:
+            m = db.get(McpServer, mid)
+            if m:
+                m.tools_json, m.status, m.last_error = tj, status, last_error
+                db.commit()
+        finally:
+            db.close()
+        print(f"MCP '{name}': {status}{(' – ' + last_error) if last_error else ''}")
 
 
 async def _startup_ollama():

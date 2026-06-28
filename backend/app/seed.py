@@ -1,6 +1,6 @@
 """Initialdaten: Einstellungen + Chef-Agent."""
 from .config import config
-from .models import Agent, Rule, Settings, Skill
+from .models import Agent, McpServer, Rule, Settings, Skill
 from .roles import role_title
 
 
@@ -53,5 +53,20 @@ def ensure_seed(db):
                     content="Jedes Ergebnis enthält: kurze Zusammenfassung, das eigentliche "
                             "Resultat und einen klaren nächsten Schritt. Keine Floskeln.",
                     scope="global", source="user", active=True))
+        db.commit()
+
+    # Vorkonfigurierte MCP-Server (eigene Python-Server, laufen ohne Node)
+    if db.query(McpServer).count() == 0:
+        db.add_all([
+            McpServer(name="filesystem", description="Dateien im Workspace lesen/schreiben/listen",
+                      transport="stdio", command="python -m backend.app.mcp_fs_server",
+                      enabled=True),
+            McpServer(name="web", description="Webseiten per HTTP abrufen (fetch_url, http_head)",
+                      transport="stdio", command="python -m backend.app.mcp_web_server",
+                      enabled=True),
+            McpServer(name="demo", description="Demo-Server zum Testen (echo, add)",
+                      transport="stdio", command="python -m backend.app.mcp_demo_server",
+                      enabled=True),
+        ])
         db.commit()
     return chef

@@ -127,10 +127,18 @@ bearbeiten, aktiv/inaktiv schalten oder löschen.
   `tools/call`); das Ergebnis kommt als Nachricht zurück. Die verfügbaren Tools
   stehen automatisch im System-Prompt der Agenten.
 
-  **Sofort testbar:** Ein mitgelieferter Demo-Server bietet die Tools `echo` und
-  `add`. In *Skills & MCP* anlegen:
-  Name `demo`, Transport `stdio`, Befehl `python -m backend.app.mcp_demo_server`,
-  dann **Verbinden**.
+  **Vorkonfiguriert & sofort nutzbar** – drei eigene Python-MCP-Server (laufen
+  ohne Node/npx) werden beim Start automatisch verbunden:
+
+  | Server | Tools | Zweck |
+  |--------|-------|-------|
+  | `filesystem` | `list_dir`, `read_file`, `write_file` | Dateien im Workspace – auf die Wurzel begrenzt (kein Ausbruch) |
+  | `web` | `fetch_url`, `http_head` | Webseiten per HTTP abrufen |
+  | `demo` | `echo`, `add` | Zum Ausprobieren |
+
+  Eigene Server fügst du unter *Skills & MCP* hinzu (stdio-Befehl oder http-URL)
+  und klickst **Verbinden**. Die Wurzel des Dateisystem-Servers steuerst du über
+  `MCP_FS_ROOT` (Standard: `WORKSPACE_DIR`).
 
 ### Bewertung, Kündigung & Modelle
 
@@ -159,7 +167,8 @@ backend/app/
   workspace.py     Code-Werkstatt: Dateien schreiben/lesen, Befehle ausführen (Sandbox)
   ollama_admin.py  Ollama: Modelle auflisten/ziehen/laden/entladen/löschen
   mcp_client.py    Echter MCP-Client (JSON-RPC über stdio/http)
-  mcp_demo_server.py  Mitgelieferter Demo-MCP-Server (Tools: echo, add)
+  mcp_serverlib.py Mini-Bibliothek für eigene MCP-Server (stdio)
+  mcp_fs_server.py · mcp_web_server.py · mcp_demo_server.py  vorkonfigurierte MCP-Server
   providers/       claude.py · openai_provider.py · ollama.py · base.py (Mock)
   prompts.py       System-Prompts + Aktions-Spezifikation
   roles.py         Rollenkatalog (wer wen einstellen darf)
