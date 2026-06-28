@@ -1,6 +1,7 @@
 """Anthropic Claude Provider (REST, ohne SDK-Abhängigkeit)."""
 import httpx
 
+from .. import secrets
 from ..config import config
 from .base import BaseProvider, LLMResult, MockProvider
 
@@ -9,7 +10,7 @@ class ClaudeProvider(BaseProvider):
     name = "claude"
 
     def available(self) -> bool:
-        return bool(config.ANTHROPIC_API_KEY)
+        return bool(secrets.provider_key("anthropic"))
 
     async def chat(self, model: str, system: str, messages: list) -> LLMResult:
         if not self.available():
@@ -19,7 +20,7 @@ class ClaudeProvider(BaseProvider):
 
         url = f"{config.ANTHROPIC_BASE_URL}/v1/messages"
         headers = {
-            "x-api-key": config.ANTHROPIC_API_KEY,
+            "x-api-key": secrets.provider_key("anthropic"),
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
@@ -35,7 +36,10 @@ class ClaudeProvider(BaseProvider):
                 r.raise_for_status()
                 data = r.json()
                 parts = [b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"]
-                return LLMResult("".join(parts), self.name, model)
+                u = data.get("usage", {})
+                return LLMResult("".join(parts), self.name, model,
+                                 input_tokens=u.get("input_tokens", 0),
+                                 output_tokens=u.get("output_tokens", 0))
         except Exception as e:  # noqa: BLE001
             if config.ALLOW_MOCK_FALLBACK:
                 return await MockProvider().chat(model, system, messages)

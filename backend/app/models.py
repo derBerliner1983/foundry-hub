@@ -14,6 +14,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 
+from .context import _default_tenant
 from .database import Base
 
 
@@ -21,11 +22,45 @@ def now():
     return datetime.utcnow()
 
 
+class User(Base):
+    """Benutzerkonto. Jeder Nutzer besitzt eine eigene Firma (tenant_id = eigene id)."""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    username = Column(String, unique=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    salt = Column(String, nullable=False)
+    is_owner = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=now)
+
+
+class Session(Base):
+    """Angemeldete Sitzung (Cookie-Token)."""
+    __tablename__ = "sessions"
+
+    token = Column(String, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    active_tenant_id = Column(Integer, nullable=False)  # gerade betrachtete Firma
+    created_at = Column(DateTime, default=now)
+    expires_at = Column(DateTime, nullable=True)
+
+
+class Access(Base):
+    """Zugriff eines Nutzers auf eine fremde Firma (Teilen)."""
+    __tablename__ = "access"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    tenant_id = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=now)
+
+
 class Settings(Base):
-    """Globale Einstellungen (Singleton, id=1)."""
+    """Einstellungen pro Firma (Tenant)."""
     __tablename__ = "settings"
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, default=_default_tenant, index=True)
     # full | ask_for_hiring | ask_for_everything
     autonomy_level = Column(String, default="ask_for_hiring")
     allowed_providers = Column(String, default="claude,openai,ollama")  # CSV
@@ -45,6 +80,13 @@ class Settings(Base):
     active_from = Column(Integer, default=0)           # Stunde 0..23 (Fenster-Start)
     active_to = Column(Integer, default=24)            # Stunde 0..24 (Fenster-Ende)
     tick_seconds = Column(Float, default=4.0)          # Takt des Orchestrators
+    # Budget (USD); 0 = unbegrenzt. Bei Überschreitung pausiert die Firma.
+    budget_limit = Column(Float, default=0.0)
+    budget_notified = Column(Boolean, default=False)
+    # Arbeitsweise der Agenten
+    thinking_mode = Column(String, default="think")    # off | think | deep
+    require_verification = Column(Boolean, default=True)  # erst prüfen, dann "fertig"
+    incremental_mode = Column(Boolean, default=True)   # kleine Teilschritte, minimaler Code
     # E-Mail
     user_email = Column(String, default="")            # Adresse für Benachrichtigungen
     email_notifications = Column(Boolean, default=False)
@@ -57,6 +99,7 @@ class Project(Base):
     __tablename__ = "projects"
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, default=_default_tenant, index=True)
     title = Column(String, nullable=False)
     description = Column(Text, default="")
     status = Column(String, default="active")  # active | done | cancelled
@@ -67,6 +110,7 @@ class Agent(Base):
     __tablename__ = "agents"
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, default=_default_tenant, index=True)
     name = Column(String, nullable=False)
     role = Column(String, nullable=False)      # ceo | project_manager | planner | ux | developer | qa
     title = Column(String, default="")
@@ -76,6 +120,7 @@ class Agent(Base):
     manager_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
     note = Column(Text, default="")
+    stuck = Column(Boolean, default=False)   # in Endlosschleife erkannt -> pausiert
     created_at = Column(DateTime, default=now)
 
     manager = relationship("Agent", remote_side=[id], backref="reports")
@@ -85,6 +130,7 @@ class Task(Base):
     __tablename__ = "tasks"
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, default=_default_tenant, index=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
     title = Column(String, nullable=False)
     description = Column(Text, default="")
@@ -95,6 +141,7 @@ class Task(Base):
     status = Column(String, default="todo")  # todo | in_progress | done | failed
     result = Column(Text, default="")
     exec_count = Column(Integer, default=0)  # Anzahl ausgeführter Befehle (Limit)
+    verified = Column(Boolean, default=False)  # erfolgreicher Test/Smoke-Check gelaufen?
     created_at = Column(DateTime, default=now)
     updated_at = Column(DateTime, default=now, onupdate=now)
 
@@ -104,6 +151,7 @@ class Message(Base):
     __tablename__ = "messages"
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, default=_default_tenant, index=True)
     thread_id = Column(String, default="")
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
     sender_kind = Column(String, default="agent")     # user | agent | system
@@ -122,6 +170,7 @@ class Rating(Base):
     __tablename__ = "ratings"
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, default=_default_tenant, index=True)
     task_id = Column(Integer, ForeignKey("tasks.id"), nullable=True)
     ratee_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False)
     rater_kind = Column(String, default="agent")  # user | agent
@@ -136,6 +185,7 @@ class PendingApproval(Base):
     __tablename__ = "approvals"
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, default=_default_tenant, index=True)
     action_json = Column(Text, nullable=False)
     requested_by_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
     summary = Column(String, default="")
@@ -149,6 +199,7 @@ class Rule(Base):
     __tablename__ = "rules"
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, default=_default_tenant, index=True)
     title = Column(String, nullable=False)
     content = Column(Text, default="")
     scope = Column(String, default="global")  # global | role | project
@@ -165,7 +216,8 @@ class Skill(Base):
     __tablename__ = "skills"
 
     id = Column(Integer, primary_key=True)
-    name = Column(String, nullable=False, unique=True)
+    tenant_id = Column(Integer, default=_default_tenant, index=True)
+    name = Column(String, nullable=False)
     description = Column(String, default="")
     instructions = Column(Text, default="")     # Prompt-/Vorgehensvorlage
     command = Column(Text, default="")          # optionaler Shell-Befehl ({args} wird ersetzt)
@@ -178,7 +230,8 @@ class McpServer(Base):
     __tablename__ = "mcp_servers"
 
     id = Column(Integer, primary_key=True)
-    name = Column(String, nullable=False, unique=True)
+    tenant_id = Column(Integer, default=_default_tenant, index=True)
+    name = Column(String, nullable=False)
     description = Column(String, default="")
     transport = Column(String, default="stdio")  # stdio | http
     command = Column(String, default="")          # bei stdio
@@ -195,6 +248,7 @@ class Milestone(Base):
     __tablename__ = "milestones"
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, default=_default_tenant, index=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
     title = Column(String, nullable=False)
     description = Column(Text, default="")
@@ -212,6 +266,7 @@ class Decision(Base):
     __tablename__ = "decisions"
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, default=_default_tenant, index=True)
     agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
     thoughts = Column(Text, default="")          # warum (Begründung des Agenten)
@@ -220,11 +275,40 @@ class Decision(Base):
     created_at = Column(DateTime, default=now)
 
 
+class Usage(Base):
+    """Token-/Kostenverbrauch je LLM-Aufruf (für Budget-Kontrolle)."""
+    __tablename__ = "usage"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, default=_default_tenant, index=True)
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
+    provider = Column(String, default="")
+    model = Column(String, default="")
+    input_tokens = Column(Integer, default=0)
+    output_tokens = Column(Integer, default=0)
+    cost = Column(Float, default=0.0)
+    created_at = Column(DateTime, default=now)
+
+
+class Secret(Base):
+    """Zugangsdaten pro Firma, vom Nutzer in der GUI gesetzt (statt .env).
+    Werte werden nie an die Oberfläche zurückgegeben, nur der Status."""
+    __tablename__ = "secrets"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, default=_default_tenant, index=True)
+    key = Column(String, nullable=False)
+    value = Column(Text, default="")
+    updated_at = Column(DateTime, default=now, onupdate=now)
+
+
 class Event(Base):
     """Aktivitäts-Log für die Timeline."""
     __tablename__ = "events"
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, default=_default_tenant, index=True)
     kind = Column(String, default="info")  # hire|fire|resign|task|rating|message|info|error
     agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
     text = Column(Text, default="")

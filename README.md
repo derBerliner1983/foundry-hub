@@ -46,11 +46,40 @@ Du gibst dem **Chef** einen Auftrag, er **stellt Projektleiter ein**, die wieder
 ## Schnellstart
 
 ```bash
-cp .env.example .env        # optional: API-Keys eintragen
 docker compose up --build
 ```
 
-Dann im Browser: **http://localhost:8000**
+Dann im Browser: **http://localhost:8000** – beim **ersten Start** legst du das
+**Owner-Konto** an (Benutzername + Passwort). API-Keys und E-Mail-Server trägst du
+anschließend bequem in der GUI ein (keine `.env` nötig). Eine `.env` geht aber
+weiterhin als Alternative.
+
+## Mehrbenutzer & Login
+
+AI-Hub ist **mehrbenutzerfähig**:
+
+- **Login** mit gehashtem Passwort (scrypt) und sicherem Session-Cookie
+  (bei HTTPS automatisch `Secure`).
+- **Eigene Firma pro Nutzer** – jeder Nutzer hat seine **vollständig getrennte**
+  Firma (eigene Agenten, Projekte, Aufgaben, Inbox, Einstellungen, Zugangsdaten).
+  Niemand sieht die Daten eines anderen.
+- **Owner verwaltet Nutzer** – nur der Owner (erstes Konto) legt unter *Nutzer &
+  Teilen* weitere Nutzer an. Keine offene Selbstregistrierung.
+- **Teilen** – der Owner kann seine Firma für einen Nutzer freigeben; dieser
+  wechselt dann oben rechts zwischen „Meine Firma" und der geteilten Firma.
+
+**Sicherheit (öffentlicher Betrieb):** Login-Sperre nach 5 Fehlversuchen
+(15 Min.), Security-Header (`X-Frame-Options`, `nosniff`, `Referrer-Policy`,
+HSTS bei HTTPS), Passwort selbst ändern und Owner-Passwort-Reset (beendet alle
+Sitzungen des Nutzers). Für HTTPS liegt eine **Reverse-Proxy-Vorlage** bei:
+
+```bash
+docker compose -f docker-compose.yml -f deploy/docker-compose.tls.yml up -d
+```
+
+(nginx + Let's Encrypt; siehe `deploy/nginx.conf`. uvicorn läuft mit
+`--proxy-headers`, erkennt also HTTPS hinter dem Proxy und setzt das Session-
+Cookie dann als `Secure`.)
 
 > **Läuft auch ohne API-Keys.** Ohne Schlüssel antworten die Agenten über den
 > eingebauten **Mock-Provider** (Demo-Verhalten), sodass du den kompletten Ablauf
@@ -94,13 +123,17 @@ die passende Ansicht.
 ### Daily-Assistent & E-Mail
 
 Getrennt von der Projekt-Firma gibt es einen **persönlichen Daily-Assistenten**
-für die tägliche Arbeit:
+für die tägliche Arbeit – er nimmt dir Dinge ab und **delegiert Projektarbeit an
+die Firma**:
 
 - **E-Mails lesen & zusammenfassen** – mit deiner Erlaubnis (Schalter „Daily-
   Assistent darf meine E-Mails lesen") liest er per **IMAP** deinen Posteingang
   und fasst ihn auf Knopfdruck zusammen (Absender, Kernaussage, empfohlene Aktion).
-- **Chatten** – frag ihn etwas; bei aktivem Zugang nimmt er die aktuellen E-Mails
-  als Kontext (z. B. „Entwirf eine Antwort an …").
+- **Chatten & abnehmen** – frag ihn etwas; bei aktivem Zugang nimmt er die
+  aktuellen E-Mails als Kontext (z. B. „Entwirf eine Antwort an …").
+- **An die Firma delegieren** – größere Vorhaben legt er als **Projekt** an,
+  kleine Sachen als **Einzelaufgabe** – automatisch beim Chef. So machst du nur
+  ihm gegenüber „auf", und die Firma übernimmt die Umsetzung.
 - **E-Mail senden** – per **SMTP** direkt aus der App.
 
 **E-Mail-Benachrichtigungen:** Optional schickt dir AI-Hub eine E-Mail bei
@@ -131,8 +164,32 @@ Befehle haben ein **Timeout** (`EXEC_TIMEOUT`) und ein **Limit pro Aufgabe**
 (`MAX_EXEC_PER_TASK`). Die Werkstatt lässt sich komplett abschalten
 (`ENABLE_CODE_EXECUTION` bzw. Schalter in den Einstellungen).
 
-> ⚠️ Die Sandbox läuft im App-Container. Für echten Produktivbetrieb sollte ein
-> isolierter Runner-Container ohne Zugriff auf sensible Daten verwendet werden.
+**Isolierter Build-Container.** Per `docker compose` läuft ein eigener
+**`sandbox`**-Container (getrennt vom App-Container, ohne DB-Zugriff), in dem die
+Agenten **echt installieren und bauen**:
+
+- **Software isoliert installieren** (`pip`/`npm`/`apt`) und per `reset_workspace`
+  wieder entfernen – ohne den App-Container zu verändern.
+- **Echte Builds** ausführen (z. B. Python-EXE via PyInstaller, Node-Builds,
+  Linux-Binaries; Android-APK mit ergänztem Android-SDK). Die **echten
+  Fehlermeldungen** kommen zurück, sodass die KI ihre Fehler **selbst findet und
+  behebt** (Schreiben → Bauen → Fehler lesen → Korrigieren).
+- Status & „Workspace leeren" in der **Werkstatt**-Ansicht.
+
+**Versionierung & Rollback.** Jede Runde mit Dateiänderungen wird automatisch
+versioniert (Git); verifizierte Stände sind als „[verified]" markiert. In der
+*Werkstatt* siehst du den **Versions-Verlauf** und kannst per Klick auf einen
+früheren (funktionierenden) Stand **zurückrollen** – Agenten können das per
+`rollback` auch selbst, wenn sie etwas kaputt gemacht haben.
+
+**Dateien rein & raus.** Eigene Dateien (Specs, Designs, Daten) **hochladen**,
+einzelne Dateien oder den **ganzen Workspace als ZIP herunterladen** (fertige
+Builds wie EXE/APK inklusive).
+
+> **Was geht / was nicht:** Linux-/Windows-/Android-Artefakte sind machbar.
+> **Apple-Apps (.ipa/.app) brauchen macOS + Xcode** und sind in einem
+> Linux-Container **nicht** baubar – dafür wäre ein macOS-Build-Runner nötig.
+> Ohne `SANDBOX_URL` laufen Befehle lokal im App-Container (weniger isoliert).
 
 ### Cookbook / Regelwerk (Standards)
 
@@ -150,11 +207,13 @@ bearbeiten, aktiv/inaktiv schalten oder löschen.
 - **Skills** – wiederverwendbare Fähigkeiten als Anweisungs-/Befehlsvorlage.
   Agenten nutzen sie mit `use_skill`; hat ein Skill einen Befehl (`{args}` wird
   ersetzt), wird er im Workspace ausgeführt, sonst dient er als Vorgehens-Vorlage.
-- **MCP-Server (echter Client)** – externe MCP-Server eintragen (stdio/http).
-  Per **Verbinden** lädt AI-Hub die echte Tool-Liste (JSON-RPC `tools/list`) und
-  zeigt sie an. Agenten rufen Tools dann wirklich auf (Aktion `mcp_call` →
-  `tools/call`); das Ergebnis kommt als Nachricht zurück. Die verfügbaren Tools
-  stehen automatisch im System-Prompt der Agenten.
+- **MCP-Server (echter Client, dauerhafte Sitzungen)** – externe MCP-Server
+  eintragen (stdio/http). Per **Verbinden** lädt AI-Hub die echte Tool-Liste
+  (JSON-RPC `tools/list`). Agenten rufen Tools wirklich auf (Aktion `mcp_call` →
+  `tools/call`); das Ergebnis kommt als Nachricht zurück. Verbindungen werden in
+  einem **Session-Pool dauerhaft gehalten** und wiederverwendet (nur einmal
+  `initialize`) – stirbt ein Prozess oder bricht die Sitzung ab, wird einmalig
+  neu verbunden. So „meckern" Server nicht über ständig neue Sitzungen.
 
   **Vorkonfiguriert & sofort nutzbar** – drei eigene Python-MCP-Server (laufen
   ohne Node/npx) werden beim Start automatisch verbunden:
@@ -197,6 +256,24 @@ wurde was gemacht":
   **Auslöser**. So ist jederzeit nachvollziehbar, *warum* ein Agent etwas getan
   hat – nicht nur *dass* es passiert ist (das zeigt zusätzlich die Aktivität).
 
+### Arbeitsweise – erst denken, dann arbeiten (keine Regressionen)
+
+Unter *Einstellungen → Arbeitsweise* steuerst du, **wie** die Agenten vorgehen:
+
+- **Denkmodus**: *Aus* (sofort handeln), *Nachdenken* (erst Ziel + kleiner Plan in
+  `thoughts`, dann handeln) oder *Tiefenrecherche* (erst recherchieren/Code lesen –
+  `web_search`/`fetch_url`/`read_file` –, dann ändern).
+- **Vor „fertig" verifizieren** *(empfohlen, an)*: Entwickler-/QA-Agenten können
+  eine Aufgabe **erst abschließen, wenn ein Test/Smoke-Check erfolgreich lief**. So
+  wird verhindert, dass „eins geht, das andere aber nicht mehr" – der Abschluss
+  wird sonst blockiert und der Agent zum Nachbessern aufgefordert.
+- **Kleine Teilschritte & minimaler Code**: pro Runde nur **ein** kleiner, in sich
+  abgeschlossener Schritt; Code **so leicht wie möglich, aber so vollständig wie
+  nötig** – nicht alles auf einmal.
+
+Diese Vorgaben fließen in die System-Prompts ein; zusätzlich liegt eine passende
+Regel im **Cookbook** (editierbar).
+
 ### Zeitplan – wann die KI prüft & beobachtet
 
 Unter *Einstellungen → Zeitplan* legst du fest, **wann** die Agenten aktiv werden:
@@ -210,6 +287,15 @@ Unter *Einstellungen → Zeitplan* legst du fest, **wann** die Agenten aktiv wer
 
 Der Status oben rechts zeigt den aktuellen Modus (läuft / Zeitfenster / manuell /
 pausiert). Der Hauptschalter *Agenten laufen automatisch* pausiert alles.
+
+### Budget & Kosten
+
+AI-Hub erfasst den **Token-Verbrauch** jedes LLM-Aufrufs und schätzt die Kosten
+je Modell (lokale Modelle = 0). Unter *Einstellungen → Budget* siehst du den
+Verbrauch (gesamt, je Modell) und setzt ein **Budget-Limit (USD)**: Wird es
+überschritten, **pausiert die Firma automatisch** (einmalige Meldung); ein
+höheres Limit hebt die Pause wieder auf. Eine Kosten-Kachel steht im Dashboard.
+*(Preise sind Richtwerte und in `backend/app/costs.py` anpassbar.)*
 
 ### Bewertung, Kündigung & Modelle
 
@@ -265,13 +351,31 @@ Kontext (Rolle, Team, Nachrichten, Aufgaben, **geltende Regeln**, verfügbare
 | `hire` / `fire` / `resign` | Mitarbeiter einstellen/kündigen (ggf. mit Freigabe) |
 | `create_task` / `complete_task` | Aufgabe anlegen/abschließen |
 | `rate` | Leistung eines Mitarbeiters bewerten (1–5) |
-| `write_file` / `read_file` / `run_command` | Code-Werkstatt (echte Dateien & Ausführung) |
+| `write_file` / `read_file` / `run_command` | Code-Werkstatt (echte Dateien, Installation & Builds im Sandbox-Container) |
+| `reset_workspace` | installierte Software/Builds wieder entfernen |
+| `rollback` | Workspace auf einen früheren (funktionierenden) Stand zurückrollen |
 | `add_rule` | Standard/Regel im Cookbook anlegen |
 | `use_skill` | Skill nutzen (Befehl ausführen oder Vorgehen anwenden) |
 | `mcp_call` | Echtes MCP-Tool eines verbundenen Servers aufrufen |
 
 So entsteht die Zusammenarbeit. Ergebnisse von Fachkräften sind Text-Artefakte
 (Konzept, Plan) **oder** echte Dateien im Workspace (Code), je nach Aufgabe.
+
+**Selbstüberwachung (Loop-Stopp):** Wiederholt ein Agent mehrfach hintereinander
+exakt dieselbe Aktion, erkennt das System die **Endlosschleife automatisch**,
+**stoppt** den Agenten, informiert seinen Vorgesetzten bzw. dich und markiert ihn
+in *Team/Org* mit „⚠️ Schleife". Per **Fortsetzen** (oder einer Nachricht an den
+Agenten) läuft er weiter – so verbrennt eine festhängende KI keine Endlos-Runden.
+
+## Zugangsdaten in der GUI (keine .env nötig)
+
+Du musst **nichts in die `.env`** schreiben: API-Keys (Claude/OpenAI/Brave) und
+die E-Mail-Server (SMTP/IMAP) lassen sich direkt unter *Einstellungen →
+Zugangsdaten* eingeben. Das System **erkennt automatisch**, was konfiguriert ist
+(Quelle `gui` oder `env`) und nimmt GUI-Werte vorrangig. Gespeicherte Werte
+werden aus Sicherheitsgründen **nie wieder angezeigt** (nur der Status), und
+gesetzte Keys greifen **sofort ohne Neustart**. Die `.env` funktioniert weiterhin
+als Alternative – beides geht.
 
 ## Konfiguration (.env)
 
@@ -293,6 +397,7 @@ So entsteht die Zusammenarbeit. Ergebnisse von Fachkräften sind Text-Artefakte
 | `EXEC_TIMEOUT` | `60` | Timeout pro Befehl (Sekunden) |
 | `MAX_EXEC_PER_TASK` | `10` | Befehlslimit pro Aufgabe |
 | `WORKSPACE_DIR` | `/data/workspace` | Wurzel der Projekt-Workspaces |
+| `SANDBOX_URL` | `http://sandbox:8800` | Isolierter Build-Container (leer = lokal im App-Container) |
 | `TICK_INTERVAL_SECONDS` | `4` | Takt des Orchestrators |
 | `MAX_AGENTS` | `25` | Maximale Mitarbeiterzahl |
 
@@ -306,6 +411,7 @@ Viele Werte lassen sich auch **live in der UI** unter *Einstellungen* ändern.
   Autonomie-Stufe, Freigaben und das Befehlslimit behältst du die Kontrolle; mit
   dem Schalter *Agenten laufen automatisch* lässt sich der Betrieb pausieren.
 - **Sandbox-Isolation**: siehe Hinweis bei der Code-Werkstatt.
-- **MCP**: Der Client baut pro Aufruf eine kurze Sitzung auf (initialize →
-  tools/list bzw. tools/call). Das ist robust; für sehr häufige Aufrufe wäre eine
-  langlebige Sitzung der nächste Optimierungsschritt.
+- **MCP**: Verbindungen werden in einem Session-Pool **dauerhaft** gehalten und
+  wiederverwendet; bei Abbruch wird automatisch neu verbunden.
+- **Builds**: Für Apple-Apps ist ein macOS-Build-Runner nötig (nicht im
+  Linux-Container). Für echte APK-Builds das Android-SDK im `sandbox`-Image ergänzen.

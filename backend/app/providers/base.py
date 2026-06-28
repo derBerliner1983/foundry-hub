@@ -11,6 +11,8 @@ class LLMResult:
     model: str
     ok: bool = True
     error: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 class BaseProvider:

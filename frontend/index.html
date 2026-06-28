@@ -27,6 +27,7 @@
       <div class="nav-item" data-view="skills"><i data-lucide="puzzle"></i> Skills & MCP</div>
       <div class="nav-item" data-view="approvals"><i data-lucide="shield-check"></i> Freigaben <span class="badge warn hidden" id="badge-approvals">0</span></div>
       <div class="nav-item" data-view="activity"><i data-lucide="activity"></i> Aktivität</div>
+      <div class="nav-item hidden" data-view="users" id="nav-users"><i data-lucide="users"></i> Nutzer & Teilen</div>
       <div class="nav-item" data-view="settings"><i data-lucide="settings"></i> Einstellungen</div>
       <div class="sidebar-foot">
         <div class="toggle" id="theme-toggle"><i data-lucide="moon"></i><span>Theme</span></div>
@@ -38,6 +39,9 @@
       <div class="topbar">
         <h1 id="view-title">Dashboard</h1>
         <div class="spacer"></div>
+        <select id="tenant-switch" class="hidden" style="width:auto;margin:0;padding:5px 9px"></select>
+        <span class="muted hidden" id="user-label"></span>
+        <button class="btn ghost sm hidden" id="logout-btn"><i data-lucide="log-out"></i></button>
         <span class="status-dot" id="run-dot"></span>
         <span class="muted" id="run-label">läuft</span>
       </div>

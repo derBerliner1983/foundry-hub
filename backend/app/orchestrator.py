@@ -4,6 +4,8 @@ import re
 
 from sqlalchemy import func, or_
 
+from . import context
+from . import costs
 from . import email_util
 from . import mcp_client
 from . import providers
@@ -22,6 +24,7 @@ from .models import (
     Settings,
     Skill,
     Task,
+    Usage,
 )
 from .prompts import build_system_prompt
 from .roles import ROLES, can_hire, role_title
@@ -32,10 +35,11 @@ MAX_ACTIONS_PER_TURN = 6
 # --------------------------------------------------------------------------- #
 # Hilfsfunktionen
 # --------------------------------------------------------------------------- #
-def get_settings(db) -> Settings:
-    s = db.get(Settings, 1)
+def get_settings(db, tenant_id=None) -> Settings:
+    t = tenant_id if tenant_id is not None else context.tid()
+    s = db.query(Settings).filter(Settings.tenant_id == t).first()
     if not s:
-        s = Settings(id=1)
+        s = Settings(tenant_id=t)
         db.add(s)
         db.commit()
     return s
@@ -90,7 +94,8 @@ def avg_rating(db, agent_id):
 
 def rules_for(db, agent: Agent, project_ctx) -> str:
     """Aktive Regeln, die für diesen Agenten gelten (global + Rolle + Projekt)."""
-    rules = db.query(Rule).filter(Rule.active == True).all()  # noqa: E712
+    rules = db.query(Rule).filter(Rule.active == True,  # noqa: E712
+                                  Rule.tenant_id == agent.tenant_id).all()
     out = []
     for r in rules:
         if r.scope == "global" \
@@ -101,12 +106,14 @@ def rules_for(db, agent: Agent, project_ctx) -> str:
 
 
 def skills_text(db) -> str:
-    skills = db.query(Skill).filter(Skill.enabled == True).all()  # noqa: E712
+    skills = db.query(Skill).filter(Skill.enabled == True,  # noqa: E712
+                                    Skill.tenant_id == context.tid()).all()
     return "\n".join(f"  • {s.name}: {s.description}" for s in skills)
 
 
 def mcp_text(db) -> str:
-    servers = db.query(McpServer).filter(McpServer.enabled == True).all()  # noqa: E712
+    servers = db.query(McpServer).filter(McpServer.enabled == True,  # noqa: E712
+                                         McpServer.tenant_id == context.tid()).all()
     lines = []
     for m in servers:
         try:
@@ -120,7 +127,8 @@ def mcp_text(db) -> str:
 
 
 def team_summary(db, viewer: Agent) -> str:
-    agents = db.query(Agent).filter(Agent.status == "employed").all()
+    agents = db.query(Agent).filter(Agent.status == "employed",
+                                    Agent.tenant_id == viewer.tenant_id).all()
     lines = []
     for a in agents:
         if a.id == viewer.id:
@@ -171,6 +179,7 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
     last_hired_id = None
     # Projektkontext: Projekt der ausgelösten Nachricht/Aufgabe, sonst eigenes Projekt
     pctx = project_ctx if project_ctx is not None else agent.project_id
+    files_changed = False  # für Git-Auto-Commit am Rundenende
 
     for act in actions:
         atype = act.get("type")
@@ -252,6 +261,19 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
         elif atype == "complete_task":
             tid = act.get("task_id")
             task = current_task if tid in ("current", None) else db.get(Task, _as_int(tid))
+            # Regressions-Schutz: Entwickler/QA müssen vorher verifizieren
+            if task and settings.require_verification and agent.role in ("developer", "qa") \
+                    and not task.verified:
+                log(db, "info", f"{agent.name}: Abschluss blockiert – erst verifizieren "
+                    f"(Tests/Smoke-Check)", agent_id=agent.id)
+                send_message(db, sender_kind="system", sender_agent_id=None,
+                             recipient_kind="agent", recipient_agent_id=agent.id,
+                             subject="Bitte erst verifizieren",
+                             body=f"Bevor '{task.title}' als erledigt gilt: führe mit run_command "
+                                  "die Tests/einen Smoke-Check aus und stelle sicher, dass nichts "
+                                  "Bestehendes kaputtgeht. Danach erneut abschließen.",
+                             project_id=pctx)
+                task = None  # nicht abschließen
             if task:
                 task.status = "done"
                 task.result = act.get("result", "")
@@ -281,12 +303,26 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
             try:
                 rel = workspace.write_file(pctx, act.get("path", "datei.txt"),
                                            act.get("content", ""))
+                files_changed = True
                 log(db, "file", f"Datei geschrieben: {rel}", agent_id=agent.id)
             except Exception as e:  # noqa: BLE001
                 log(db, "error", f"Datei-Fehler: {e}", agent_id=agent.id)
 
         elif atype == "run_command":
             _do_run_command(db, agent, settings, act, current_task, pctx)
+            files_changed = True
+
+        elif atype == "reset_workspace":
+            res = workspace.reset_workspace(pctx, act.get("path", ""))
+            files_changed = True
+            log(db, "exec", f"Workspace zurückgesetzt ({'ok' if res.get('ok') else res.get('stderr','Fehler')})",
+                agent_id=agent.id)
+
+        elif atype == "rollback":
+            commit = act.get("commit", "")
+            res = workspace.git_rollback(pctx, commit) if commit else {"ok": False, "stderr": "Kein Commit"}
+            log(db, "git", f"Rollback auf {commit}: {'ok' if res.get('ok') else res.get('stderr','Fehler')}",
+                agent_id=agent.id)
 
         elif atype == "read_file":
             content = workspace.read_file(pctx, act.get("path", ""))
@@ -337,6 +373,14 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
                 ms.status = "in_progress"
                 log(db, "milestone", f"Meilenstein gestartet: {ms.title}", agent_id=agent.id)
 
+    # Git-Auto-Commit, wenn diese Runde Dateien verändert hat (Checkpoint für Rollback)
+    if files_changed and settings.enable_code_exec:
+        verified = bool(current_task and current_task.verified)
+        msg = f"{agent.name}: Arbeitsstand" + (" [verified]" if verified else "")
+        res = workspace.git_autocommit(pctx, msg)
+        if res.get("ok"):
+            log(db, "git", f"Checkpoint gesichert{' [verified]' if verified else ''}", agent_id=agent.id)
+
     # Eingehende Aufgabe als in Bearbeitung markieren, falls nichts abgeschlossen
     db.commit()
 
@@ -371,6 +415,7 @@ def check_overdue(db):
     overdue = (db.query(Milestone)
                .filter(Milestone.due_date.isnot(None),
                        Milestone.status != "done",
+                       Milestone.tenant_id == context.tid(),
                        Milestone.overdue_notified == False)  # noqa: E712
                .all())
     notified = 0
@@ -495,6 +540,8 @@ def _do_run_command(db, agent, settings, act, current_task, pctx=None):
     res = workspace.run_command(pctx, cmd)
     if current_task:
         current_task.exec_count = (current_task.exec_count or 0) + 1
+        if res["ok"]:  # erfolgreicher Test/Smoke-Check -> Aufgabe gilt als verifiziert
+            current_task.verified = True
     status = "ok" if res["ok"] else f"Fehler ({res['code']})"
     out = (res["stdout"] + ("\n" + res["stderr"] if res["stderr"] else ""))[:1500]
     log(db, "exec", f"$ {cmd}  → {status}\n{out}", agent_id=agent.id)
@@ -612,38 +659,41 @@ def _maybe_auto_fire(db, agent, settings, ratee_id):
 # --------------------------------------------------------------------------- #
 # Eine Runde (Tick)
 # --------------------------------------------------------------------------- #
-def _next_agent_to_act(db):
-    """Wählt einen beschäftigten Agenten mit offener Arbeit (Nachricht oder Aufgabe)."""
+def _next_agent_to_act(db, tenants):
+    """Wählt einen beschäftigten Agenten (aus aktiven Firmen) mit offener Arbeit."""
+    if not tenants:
+        return None
     # Agenten mit ungelesener Nachricht
-    sub = (
-        db.query(Message.recipient_agent_id)
-        .filter(Message.recipient_kind == "agent", Message.is_read == False)  # noqa: E712
-        .subquery()
-    )
+    ids = [r[0] for r in db.query(Message.recipient_agent_id)
+           .filter(Message.recipient_kind == "agent", Message.is_read == False)  # noqa: E712
+           .distinct() if r[0] is not None]
     agent = (
         db.query(Agent)
-        .filter(Agent.status == "employed", Agent.id.in_(sub))
+        .filter(Agent.status == "employed", Agent.stuck == False,  # noqa: E712
+                Agent.tenant_id.in_(tenants), Agent.id.in_(ids))
         .order_by(Agent.id)
         .first()
-    )
+    ) if ids else None
     if agent:
         return agent
     # Agenten mit offener Aufgabe
     task = (
         db.query(Task)
-        .filter(Task.status == "todo", Task.assigned_agent_id.isnot(None))
+        .filter(Task.status == "todo", Task.assigned_agent_id.isnot(None),
+                Task.tenant_id.in_(tenants))
         .order_by(Task.id)
         .first()
     )
     if task:
         a = db.get(Agent, task.assigned_agent_id)
-        if a and a.status == "employed":
+        if a and a.status == "employed" and not a.stuck:
             return a
     return None
 
 
 async def run_agent_turn(db, agent: Agent):
-    settings = get_settings(db)
+    context.set_tenant(agent.tenant_id)
+    settings = get_settings(db, agent.tenant_id)
 
     # Kontext sammeln: ungelesene Nachrichten + offene Aufgaben
     msgs = (
@@ -692,6 +742,14 @@ async def run_agent_turn(db, agent: Agent):
 
     result = await providers.chat(agent.provider, agent.model, system,
                                   [{"role": "user", "content": user_msg}])
+    # Verbrauch/Kosten protokollieren
+    cost = costs.estimate(result.model, result.input_tokens, result.output_tokens)
+    if result.input_tokens or result.output_tokens or not result.ok:
+        db.add(Usage(tenant_id=agent.tenant_id, agent_id=agent.id, project_id=project_ctx,
+                     provider=result.provider, model=result.model,
+                     input_tokens=result.input_tokens, output_tokens=result.output_tokens,
+                     cost=cost))
+        db.commit()
     if not result.ok:
         log(db, "error", f"{agent.name}: LLM-Fehler {result.error}", agent_id=agent.id)
         db.commit()
@@ -707,8 +765,43 @@ async def run_agent_turn(db, agent: Agent):
                     actions_summary=summary[:2000],
                     trigger=" | ".join(context_lines)[:1000]))
     db.commit()
+    _check_loop(db, agent)
     return {"agent": agent.name, "provider": result.provider,
             "thoughts": parsed.get("thoughts", ""), "actions": parsed.get("actions", [])}
+
+
+LOOP_THRESHOLD = 3  # so oft dieselbe Aktion hintereinander = Schleife
+
+
+def _check_loop(db, agent: Agent):
+    """Erkennt, wenn ein Agent immer wieder dasselbe tut, und stoppt ihn."""
+    recent = (db.query(Decision)
+              .filter(Decision.agent_id == agent.id)
+              .order_by(Decision.id.desc())
+              .limit(LOOP_THRESHOLD).all())
+    if len(recent) < LOOP_THRESHOLD:
+        return
+    sigs = {(r.actions_summary or "").strip() for r in recent}
+    if len(sigs) == 1:  # alle identisch -> Schleife
+        agent.stuck = True
+        log(db, "loop", f"{agent.name} hängt in einer Schleife "
+            f"('{recent[0].actions_summary[:60]}') – automatisch gestoppt.", agent_id=agent.id)
+        # Vorgesetzten bzw. Nutzer informieren
+        if agent.manager_id:
+            send_message(db, sender_kind="system", sender_agent_id=None,
+                         recipient_kind="agent", recipient_agent_id=agent.manager_id,
+                         subject=f"⚠️ {agent.name} steckt fest",
+                         body=f"{agent.name} wiederholt dieselbe Aktion und wurde gestoppt. "
+                              f"Bitte Aufgabe klären, neu zuweisen oder ersetzen.",
+                         project_id=agent.project_id)
+        else:
+            send_message(db, sender_kind="system", sender_agent_id=None,
+                         recipient_kind="user", recipient_agent_id=None,
+                         subject=f"⚠️ {agent.name} steckt in einer Schleife",
+                         body="Der Agent wurde automatisch gestoppt. Du kannst ihn nach einer "
+                              "Klärung wieder fortsetzen.", requires_answer=True)
+            maybe_notify(db, "question", f"{agent.name} steckt fest", "Automatisch gestoppt.")
+        db.commit()
 
 
 def _summarize_actions(actions) -> str:
@@ -761,14 +854,52 @@ def within_schedule(settings) -> bool:
     return True  # always
 
 
-async def tick(db, force=False):
-    """Eine Arbeitseinheit. Gibt zurück, was passiert ist (oder None).
+def tenant_spend(db, tenant_id) -> float:
+    val = db.query(func.sum(Usage.cost)).filter(Usage.tenant_id == tenant_id).scalar()
+    return round(val or 0.0, 4)
+
+
+def _over_budget(db, s) -> bool:
+    if not s.budget_limit or s.budget_limit <= 0:
+        return False
+    spent = tenant_spend(db, s.tenant_id)
+    if spent >= s.budget_limit:
+        if not s.budget_notified:
+            s.budget_notified = True
+            context.set_tenant(s.tenant_id)
+            log(db, "info", f"💸 Budget erreicht ({spent:.2f}/{s.budget_limit:.2f} USD) – Firma pausiert.")
+            maybe_notify(db, "question", "Budget erreicht – Firma pausiert",
+                         f"Verbrauch {spent:.2f} USD von {s.budget_limit:.2f} USD. "
+                         "Erhöhe das Budget in den Einstellungen, um fortzufahren.")
+            db.commit()
+        return True
+    return False
+
+
+def _active_tenants(db, force=False, only_tenant=None) -> list:
+    """Firmen, deren KI gerade arbeiten darf (auto_run + Zeitplan + Budget)."""
+    q = db.query(Settings)
+    if only_tenant is not None:
+        q = q.filter(Settings.tenant_id == only_tenant)
+    out = []
+    for s in q.all():
+        if _over_budget(db, s):
+            continue
+        if force or (s.auto_run and within_schedule(s)):
+            out.append(s.tenant_id)
+    return out
+
+
+async def tick(db, force=False, only_tenant=None):
+    """Eine Arbeitseinheit über alle aktiven Firmen (oder nur only_tenant).
     force=True ignoriert den Zeitplan (für 'Jetzt prüfen')."""
-    settings = get_settings(db)
-    if not force and (not settings.auto_run or not within_schedule(settings)):
+    tenants = _active_tenants(db, force=force, only_tenant=only_tenant)
+    if not tenants:
         return None
-    check_overdue(db)  # überfällige Meilensteine melden, bevor Agenten arbeiten
-    agent = _next_agent_to_act(db)
+    for t in tenants:  # überfällige Meilensteine je Firma melden
+        context.set_tenant(t)
+        check_overdue(db)
+    agent = _next_agent_to_act(db, tenants)
     if not agent:
         return None
     return await run_agent_turn(db, agent)

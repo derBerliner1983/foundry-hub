@@ -12,13 +12,22 @@ let selectedAgent = null; // null = Chef-Inbox (an Nutzer)
 
 const root = document.getElementById("view-root");
 const titleEl = document.getElementById("view-title");
-const TITLES = { dashboard: "Dashboard", inbox: "Inbox", assistant: "Daily-Assistent", projects: "Projekte", progress: "Fortschritt", org: "Team / Organisation", tasks: "Aufgaben", workshop: "Werkstatt", cookbook: "Cookbook / Regelwerk", skills: "Skills & MCP", approvals: "Freigaben", activity: "Aktivität", settings: "Einstellungen" };
+const TITLES = { dashboard: "Dashboard", inbox: "Inbox", assistant: "Daily-Assistent", projects: "Projekte", progress: "Fortschritt", org: "Team / Organisation", tasks: "Aufgaben", workshop: "Werkstatt", cookbook: "Cookbook / Regelwerk", skills: "Skills & MCP", approvals: "Freigaben", activity: "Aktivität", users: "Nutzer & Teilen", settings: "Einstellungen" };
 let wsProject = null;
 let progProject = "";
 
 function icons() { window.lucide && lucide.createIcons(); }
 function esc(s) { return (s || "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
 function initials(n) { return (n || "?").split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase(); }
+function secField(sec, key, label) {
+  const st = sec[key] || { configured: false, source: "none", secret: false };
+  const badge = st.configured
+    ? `<span class="pill employed">✓ ${st.source}</span>`
+    : `<span class="pill resigned">nicht gesetzt</span>`;
+  const ph = st.configured ? "•••• gesetzt – neu eingeben zum Ändern" : "eintragen …";
+  return `<label>${label} ${badge}</label>
+    <input data-secret="${key}" type="${st.secret ? 'password' : 'text'}" autocomplete="off" placeholder="${ph}"/>`;
+}
 
 // ---------- Navigation ----------
 document.querySelectorAll(".nav-item").forEach(el => {
@@ -58,6 +67,7 @@ async function render() {
   if (currentView === "workshop") return renderWorkshop();
   if (currentView === "cookbook") return renderCookbook();
   if (currentView === "skills") return renderSkills();
+  if (currentView === "users") return renderUsers();
   if (currentView === "approvals") return renderApprovals();
   if (currentView === "activity") return renderActivity();
   if (currentView === "settings") return renderSettings();
@@ -78,6 +88,7 @@ window.answerQuestion = async (qid, senderAgentId) => {
 
 async function renderDashboard() {
   const d = await api.get("/api/dashboard");
+  const bud = await api.get("/api/budget");
   const s = d.stats;
   const tile = (label, val, view, color) => `<div class="card" style="cursor:pointer" onclick="goView('${view}')">
     <div class="stat-label">${label}</div><div class="stat" style="color:${color || 'var(--text)'}">${val}</div></div>`;
@@ -90,6 +101,7 @@ async function renderDashboard() {
       ${tile("Offene Rückfragen", s.open_questions, "inbox", s.open_questions ? "var(--yellow)" : "var(--text)")}
       ${tile("Freigaben", s.pending_approvals, "approvals", s.pending_approvals ? "var(--yellow)" : "var(--text)")}
       ${tile("Überfällig", s.overdue, "progress", s.overdue ? "var(--red)" : "var(--text)")}
+      ${tile(bud.paused ? "Budget (pausiert!)" : "Kosten (USD)", "$" + bud.spent.toFixed(2), "settings", bud.paused ? "var(--red)" : "var(--text)")}
     </div>
 
     ${s.overdue ? `<div class="card" style="margin-bottom:16px;border-color:var(--red)">
@@ -215,7 +227,9 @@ window.asSend = async () => {
   assistChat.push({ role: "user", text: msg }); inp.value = ""; renderChat();
   assistChat.push({ role: "assistant", text: "…" }); renderChat();
   const r = await api.post("/api/assistant/chat", { message: msg });
-  assistChat[assistChat.length - 1] = { role: "assistant", text: r.reply || r.error || "(keine Antwort)" };
+  let text = r.reply || r.error || "(keine Antwort)";
+  if (r.done && r.done.length) text += "\n\n✅ " + r.done.join("\n✅ ");
+  assistChat[assistChat.length - 1] = { role: "assistant", text };
   renderChat();
 };
 
@@ -313,6 +327,7 @@ async function renderOrg() {
       <div class="avatar role-${a.role}">${initials(a.name)}</div>
       <div class="info"><b>${esc(a.name)}</b><small>${esc(a.title)} · ${esc(a.provider)}/${esc(a.model)}</small></div>
       <div class="donut" style="--p:${p}"><span>${r ?? "–"}</span></div>
+      ${a.stuck ? `<span class="pill fired">⚠️ Schleife</span><button class="btn green sm" onclick="resumeAgent(${a.id})"><i data-lucide="play"></i> fortsetzen</button>` : ''}
       <span class="pill ${a.status}">${a.status}</span>
       <button class="btn ghost sm" onclick="openAgent(${a.id})"><i data-lucide="star"></i> bewerten</button>
     </div>` + (byManager[a.id] || []).map(c => row(c, depth + 1)).join("");
@@ -323,6 +338,7 @@ async function renderOrg() {
   icons();
 }
 
+window.resumeAgent = async (id) => { await api.post(`/api/agents/${id}/resume`); renderOrg(); };
 window.openAgent = async function (id) {
   const a = await api.get("/api/agents/" + id);
   const d = document.getElementById("agent-detail");
@@ -375,6 +391,11 @@ async function renderWorkshop() {
     <div class="card" style="margin-bottom:14px">
       <div class="row"><h3 style="margin:0"><i data-lucide="folder-code"></i> Projekt-Workspace</h3>
         <div class="spacer" style="flex:1"></div>
+        <span id="ws-sandbox" class="tag">Sandbox …</span>
+        <input type="file" id="ws-upload" class="hidden"/>
+        <button class="btn ghost sm" id="ws-up"><i data-lucide="upload"></i> Hochladen</button>
+        <button class="btn ghost sm" id="ws-zip"><i data-lucide="download"></i> ZIP</button>
+        <button class="btn ghost sm" id="ws-reset"><i data-lucide="trash-2"></i> leeren</button>
         <select id="ws-proj" style="width:auto;margin:0">${opts || '<option>kein Projekt</option>'}</select></div>
     </div>
     <div class="grid cols-2">
@@ -384,9 +405,34 @@ async function renderWorkshop() {
     <div class="panel" style="margin-top:14px">
       <div class="panel-head"><i data-lucide="terminal"></i> <b>Konsole / Ausführungen</b><i data-lucide="chevron-down" class="chev"></i></div>
       <div class="panel-body" id="ws-console"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><i data-lucide="git-branch"></i> <b>Versionen / Rollback</b><i data-lucide="chevron-down" class="chev"></i></div>
+      <div class="panel-body" id="ws-git"></div>
     </div>`;
   icons(); setupCollapse();
   document.getElementById("ws-proj").onchange = e => { wsProject = e.target.value; loadWorkshop(); };
+  document.getElementById("ws-reset").onclick = async () => {
+    if (!confirm("Workspace dieses Projekts leeren (Dateien & Builds löschen)?")) return;
+    await api.post("/api/sandbox/reset?project_id=" + (wsProject || ""));
+    loadWorkshop();
+  };
+  document.getElementById("ws-up").onclick = () => document.getElementById("ws-upload").click();
+  document.getElementById("ws-upload").onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const fd = new FormData(); fd.append("file", f); if (wsProject) fd.append("project_id", wsProject);
+    await fetch("/api/workspace/upload", { method: "POST", body: fd });
+    loadWorkshop();
+  };
+  document.getElementById("ws-zip").onclick = () => {
+    window.open("/api/workspace/zip?project_id=" + (wsProject || ""), "_blank");
+  };
+  api.get("/api/sandbox/status").then(st => {
+    const el = document.getElementById("ws-sandbox"); if (!el) return;
+    if (st.enabled && st.reachable) el.innerHTML = `<span style="color:var(--green)">● Build-Container aktiv</span>`;
+    else if (st.enabled) el.innerHTML = `<span style="color:var(--red)">● Sandbox offline</span>`;
+    else el.textContent = "lokal (kein Build-Container)";
+  });
   loadWorkshop();
 }
 
@@ -396,9 +442,19 @@ async function loadWorkshop() {
   const fEl = document.getElementById("ws-files");
   if (!fEl) return;
   fEl.innerHTML = data.files.length ? data.files.map(f =>
-    `<div class="agent-row" style="cursor:pointer;padding:8px 11px" onclick="viewFile('${encodeURIComponent(f.path)}')">
-      <i data-lucide="file" style="width:16px"></i><div class="info"><b style="font-size:13px">${esc(f.path)}</b></div>
-      <span class="tag">${f.size} B</span></div>`).join("") : `<div class="muted">Noch keine Dateien. Entwickler-Agenten legen hier Dateien an.</div>`;
+    `<div class="agent-row" style="padding:8px 11px">
+      <i data-lucide="file" style="width:16px"></i>
+      <div class="info" style="cursor:pointer" onclick="viewFile('${encodeURIComponent(f.path)}')"><b style="font-size:13px">${esc(f.path)}</b></div>
+      <span class="tag">${f.size} B</span>
+      <a class="btn ghost sm" href="/api/workspace/download?project_id=${wsProject || ''}&path=${encodeURIComponent(f.path)}" download><i data-lucide="download"></i></a>
+    </div>`).join("") : `<div class="muted">Noch keine Dateien. Entwickler-Agenten legen hier Dateien an, oder lade selbst welche hoch.</div>`;
+  const git = await api.get("/api/git/history?project_id=" + wsProject);
+  const gEl = document.getElementById("ws-git");
+  if (gEl) gEl.innerHTML = git.history.length ? git.history.map(h => `<div class="agent-row" style="padding:8px 11px">
+    <i data-lucide="${h.verified ? 'badge-check' : 'git-commit'}" style="width:16px;color:${h.verified ? 'var(--green)' : 'var(--text-dim)'}"></i>
+    <div class="info"><b style="font-size:13px">${esc(h.message)}</b><small>${esc(h.date)} · ${esc(h.sha)}</small></div>
+    <button class="btn ghost sm" onclick="rollbackTo('${esc(h.sha)}')"><i data-lucide="rotate-ccw"></i> hierhin zurück</button></div>`).join("")
+    : `<div class="muted">Noch keine Versionen. Sie entstehen automatisch, wenn Agenten Dateien ändern.</div>`;
   const cons = await api.get("/api/console?project_id=" + wsProject);
   const cEl = document.getElementById("ws-console");
   cEl.innerHTML = cons.length ? cons.map(e =>
@@ -411,6 +467,12 @@ async function loadWorkshop() {
 window.viewFile = async function (p) {
   const r = await api.get(`/api/workspace/file?project_id=${wsProject}&path=${p}`);
   document.getElementById("ws-view").textContent = r.content || "(leer)";
+};
+window.rollbackTo = async function (sha) {
+  if (!confirm("Workspace auf Version " + sha + " zurücksetzen? Spätere Änderungen gehen verloren.")) return;
+  const r = await api.post("/api/git/rollback", { project_id: wsProject ? Number(wsProject) : null, commit: sha });
+  if (!r.ok) alert("Rollback fehlgeschlagen: " + (r.stderr || ""));
+  loadWorkshop();
 };
 
 // ---------- Projekte ----------
@@ -667,10 +729,18 @@ async function renderActivity() {
 // ---------- Settings ----------
 async function renderSettings() {
   const s = await api.get("/api/settings");
+  const sec = await api.get("/api/secrets");
+  const bud = await api.get("/api/budget");
   const provOpts = (sel) => ["claude", "openai", "ollama"].map(p => `<option ${sel === p ? "selected" : ""} value="${p}">${p}${s.providers_available[p] ? "" : " (kein Key → Mock)"}</option>`).join("");
   const autoOpts = { full: "Voll autonom (keine Rückfragen)", ask_for_hiring: "Nachfragen bei Einstellung/Kündigung", ask_for_everything: "Bei allem Wichtigen nachfragen" };
   const schedOpts = { always: "Dauerbetrieb (immer)", window: "Nur in einem Zeitfenster", manual: "Nur manuell (auf Knopfdruck)" };
   root.innerHTML = `
+    <div class="card" style="margin-bottom:14px"><h3><i data-lucide="lock"></i> Konto & Sicherheit</h3>
+      <label>Aktuelles Passwort</label><input id="pw-old" type="password" autocomplete="current-password"/>
+      <label>Neues Passwort (min. 6 Zeichen)</label><input id="pw-new" type="password" autocomplete="new-password"/>
+      <button class="btn" id="pw-save"><i data-lucide="key"></i> Passwort ändern</button>
+      <span class="muted" id="pw-status" style="margin-left:8px"></span>
+    </div>
     <div class="card" style="margin-bottom:14px"><h3><i data-lucide="clock"></i> Zeitplan – wann die KI prüft & beobachtet</h3>
       <div class="grid cols-2" style="gap:10px">
         <div><label>Modus</label>
@@ -684,6 +754,29 @@ async function renderSettings() {
       </div>
       <div class="row"><button class="btn" id="s-runnow"><i data-lucide="play"></i> Jetzt prüfen</button>
         <span class="muted" id="run-info"></span></div>
+    </div>
+    <div class="card" style="margin-bottom:14px"><h3><i data-lucide="brain-circuit"></i> Arbeitsweise – erst denken, dann arbeiten</h3>
+      <label>Denkmodus</label>
+      <select id="s-think">
+        <option value="off" ${s.thinking_mode === 'off' ? 'selected' : ''}>Aus (sofort handeln)</option>
+        <option value="think" ${s.thinking_mode === 'think' ? 'selected' : ''}>Nachdenken (Plan vor dem Handeln)</option>
+        <option value="deep" ${s.thinking_mode === 'deep' ? 'selected' : ''}>Tiefenrecherche (erst recherchieren/lesen, dann handeln)</option>
+      </select>
+      <div class="row" style="margin-top:8px"><div class="toggle" id="s-verify"><div class="switch ${s.require_verification ? 'on' : ''}"></div> <b>Vor „fertig" verifizieren</b> (Entwickler/QA müssen testen – keine Regressionen)</div></div>
+      <div class="row" style="margin-top:8px"><div class="toggle" id="s-incr"><div class="switch ${s.incremental_mode ? 'on' : ''}"></div> Kleine Teilschritte & minimaler Code (nicht alles auf einmal)</div></div>
+      <div class="tag" style="margin-top:8px">Ist „verifizieren" an, blockiert das System den Abschluss einer Entwickler-/QA-Aufgabe, bis ein Test/Smoke-Check erfolgreich lief.</div>
+    </div>
+    <div class="card" style="margin-bottom:14px"><h3><i data-lucide="wallet"></i> Budget & Kosten ${bud.paused ? '<span class="pill fired">pausiert</span>' : ''}</h3>
+      <div class="row" style="gap:18px;margin-bottom:10px">
+        <div><div class="stat-label">Verbraucht</div><div class="stat">$${bud.spent.toFixed(4)}</div></div>
+        <div><div class="stat-label">Tokens (ein/aus)</div><div class="stat" style="font-size:18px">${bud.input_tokens}/${bud.output_tokens}</div></div>
+        <div><div class="stat-label">Aufrufe</div><div class="stat" style="font-size:18px">${bud.calls}</div></div>
+      </div>
+      ${bud.limit > 0 ? bar(Math.min(100, Math.round(100 * bud.spent / bud.limit)), bud.paused ? 'var(--red)' : 'var(--accent)') : ''}
+      <label style="margin-top:10px">Budget-Limit in USD (0 = unbegrenzt) – bei Überschreitung pausiert die Firma automatisch</label>
+      <input id="s-budget" type="number" min="0" step="1" value="${bud.limit}"/>
+      ${bud.by_model.length ? `<div class="stat-label" style="margin-top:6px">Je Modell</div>` + bud.by_model.map(m => `<div class="row"><small style="flex:1">${esc(m.model)}</small><small>$${m.cost.toFixed(4)}</small></div>`).join("") : ''}
+      <div class="tag" style="margin-top:8px">Kosten sind Schätzungen (lokale Modelle = $0). Budget erhöhen hebt eine Pausierung wieder auf.</div>
     </div>
     <div class="grid cols-2">
       <div class="card"><h3><i data-lucide="sliders"></i> Autonomie & Freigaben</h3>
@@ -708,6 +801,27 @@ async function renderSettings() {
       <span class="muted" id="s-status" style="margin-left:10px"></span></div>
     <div class="card" style="margin-top:16px"><h3><i data-lucide="plug"></i> Provider-Status</h3>
       ${Object.entries(s.providers_available).map(([k, v]) => `<span class="pill ${v ? "employed" : "resigned"}" style="margin-right:8px">${k}: ${v ? "verfügbar" : "Mock"}</span>`).join("")}
+    </div>
+    <div class="card" style="margin-top:16px"><h3><i data-lucide="key-round"></i> Zugangsdaten (direkt hier – keine .env nötig)</h3>
+      <div class="tag" style="margin-bottom:10px">Leeres Feld = unverändert. Gespeicherte Werte werden aus Sicherheitsgründen nicht angezeigt. Quelle: <b>gui</b> = hier gesetzt, <b>env</b> = aus .env erkannt.</div>
+      ${secField(sec, "ANTHROPIC_API_KEY", "Anthropic / Claude API-Key")}
+      ${secField(sec, "OPENAI_API_KEY", "OpenAI API-Key")}
+      ${secField(sec, "BRAVE_API_KEY", "Brave Search API-Key (optional)")}
+      <hr style="border-color:var(--border);margin:12px 0"/>
+      <div class="stat-label" style="margin-bottom:6px">E-Mail senden (SMTP)</div>
+      ${secField(sec, "SMTP_HOST", "SMTP-Server (z. B. smtp.gmail.com)")}
+      ${secField(sec, "SMTP_PORT", "SMTP-Port (z. B. 587)")}
+      ${secField(sec, "SMTP_USER", "SMTP-Benutzer / E-Mail")}
+      ${secField(sec, "SMTP_PASS", "SMTP-Passwort / App-Passwort")}
+      ${secField(sec, "SMTP_FROM", "Absender-Adresse (optional)")}
+      <hr style="border-color:var(--border);margin:12px 0"/>
+      <div class="stat-label" style="margin-bottom:6px">E-Mail lesen (IMAP) – für den Assistenten</div>
+      ${secField(sec, "IMAP_HOST", "IMAP-Server (z. B. imap.gmail.com)")}
+      ${secField(sec, "IMAP_PORT", "IMAP-Port (z. B. 993)")}
+      ${secField(sec, "IMAP_USER", "IMAP-Benutzer (leer = wie SMTP)")}
+      ${secField(sec, "IMAP_PASS", "IMAP-Passwort (leer = wie SMTP)")}
+      <button class="btn" id="sec-save"><i data-lucide="save"></i> Zugangsdaten speichern</button>
+      <span class="muted" id="sec-status" style="margin-left:8px"></span>
     </div>
     <div class="card" style="margin-top:16px"><h3><i data-lucide="mail"></i> E-Mail & Benachrichtigungen</h3>
       <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:10px">
@@ -736,11 +850,29 @@ async function renderSettings() {
     await api.post("/api/ollama/pull", { name: n }); loadOllama();
   };
   const toggles = {};
-  ["s-run", "s-hire", "s-fire", "s-code", "s-notif", "s-novd", "s-noq", "s-aimail"].forEach(id => {
+  ["s-run", "s-hire", "s-fire", "s-code", "s-verify", "s-incr", "s-notif", "s-novd", "s-noq", "s-aimail"].forEach(id => {
     const el = document.getElementById(id);
     toggles[id] = el.querySelector(".switch").classList.contains("on");
     el.onclick = () => { const sw = el.querySelector(".switch"); sw.classList.toggle("on"); toggles[id] = sw.classList.contains("on"); };
   });
+  // Passwort ändern
+  document.getElementById("pw-save").onclick = async () => {
+    const r = await fetch("/api/auth/password", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ old_password: document.getElementById("pw-old").value, new_password: document.getElementById("pw-new").value }) });
+    const d = await r.json().catch(() => ({}));
+    document.getElementById("pw-status").textContent = r.status === 200 ? "✓ geändert" : ("✕ " + (d.detail || "Fehler"));
+  };
+  // Zugangsdaten speichern (nur ausgefüllte Felder)
+  document.getElementById("sec-save").onclick = async () => {
+    const payload = {};
+    document.querySelectorAll("[data-secret]").forEach(inp => {
+      if (inp.value.trim() !== "") payload[inp.dataset.secret] = inp.value.trim();
+    });
+    if (Object.keys(payload).length === 0) { document.getElementById("sec-status").textContent = "nichts geändert"; return; }
+    await api.post("/api/secrets", payload);
+    document.getElementById("sec-status").textContent = "✓ gespeichert";
+    setTimeout(renderSettings, 600);
+  };
   // Zeitplan: Fenster ein-/ausblenden + Jetzt prüfen
   document.getElementById("s-sched").onchange = e => {
     document.getElementById("s-window").style.display = e.target.value === "window" ? "" : "none";
@@ -757,6 +889,9 @@ async function renderSettings() {
       auto_run: toggles["s-run"], require_approval_hire: toggles["s-hire"], require_approval_fire: toggles["s-fire"],
       fire_threshold: parseFloat(document.getElementById("s-thresh").value),
       enable_code_exec: toggles["s-code"],
+      thinking_mode: document.getElementById("s-think").value,
+      require_verification: toggles["s-verify"], incremental_mode: toggles["s-incr"],
+      budget_limit: parseFloat(document.getElementById("s-budget").value || "0"),
       schedule_mode: document.getElementById("s-sched").value,
       tick_seconds: parseFloat(document.getElementById("s-tick").value),
       active_from: parseInt(document.getElementById("s-from").value || "0"),
@@ -818,12 +953,112 @@ async function refreshBadges() {
   } catch (e) { /* still */ }
 }
 
-// Initial + Polling
-render();
-refreshBadges();
-setInterval(() => {
+// ---------- Auth / Mehrbenutzer ----------
+let CURRENT_USER = null;
+let pollTimer = null;
+
+async function checkAuth() {
+  const r = await fetch("/api/auth/me");
+  return r.status === 200 ? r.json() : null;
+}
+
+async function renderAuthScreen() {
+  const st = await api.get("/api/auth/status");
+  const setup = st.needs_setup;
+  document.querySelector(".app").innerHTML = `
+    <div style="grid-column:1/-1;display:grid;place-items:center;min-height:100vh">
+      <div class="card" style="width:360px;max-width:92vw">
+        <div class="brand" style="justify-content:center"><div class="logo"><i data-lucide="bot"></i></div>
+          <div><b>AI-Hub</b><small>${setup ? "Owner-Konto einrichten" : "Anmelden"}</small></div></div>
+        <label>Benutzername</label><input id="au-user" autocomplete="username"/>
+        <label>Passwort</label><input id="au-pass" type="password" autocomplete="current-password"
+          onkeydown="if(event.key==='Enter')doAuth(${setup})"/>
+        <button class="btn" style="width:100%;justify-content:center" onclick="doAuth(${setup})">
+          <i data-lucide="${setup ? 'user-plus' : 'log-in'}"></i> ${setup ? "Konto erstellen & starten" : "Anmelden"}</button>
+        <div class="tag" id="au-err" style="color:var(--red);margin-top:10px;display:none"></div>
+        ${setup ? `<div class="tag" style="margin-top:10px">Dies wird das Owner-Konto. Weitere Nutzer legst du später unter „Nutzer & Teilen" an.</div>` : ""}
+      </div>
+    </div>`;
+  icons();
+}
+window.doAuth = async (setup) => {
+  const username = document.getElementById("au-user").value.trim();
+  const password = document.getElementById("au-pass").value;
+  const err = document.getElementById("au-err");
+  const r = await fetch(setup ? "/api/auth/setup" : "/api/auth/login", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }) });
+  if (r.status === 200) { location.reload(); }
+  else { const d = await r.json().catch(() => ({})); err.style.display = "block"; err.textContent = d.detail || d.error || "Fehlgeschlagen"; }
+};
+
+function setupHeader(me) {
+  document.getElementById("user-label").textContent = me.username + (me.is_owner ? " (Owner)" : "");
+  document.getElementById("user-label").classList.remove("hidden");
+  const lo = document.getElementById("logout-btn"); lo.classList.remove("hidden");
+  lo.onclick = async () => { await api.post("/api/auth/logout"); location.reload(); };
+  const sw = document.getElementById("tenant-switch");
+  if (me.tenants.length > 1) {
+    sw.classList.remove("hidden");
+    sw.innerHTML = me.tenants.map(t => `<option value="${t.tenant_id}" ${t.tenant_id === me.active_tenant ? "selected" : ""}>${t.own ? "Meine Firma" : esc(t.name)}</option>`).join("");
+    sw.onchange = async () => { await api.post("/api/auth/switch", { tenant_id: Number(sw.value) }); location.reload(); };
+  }
+  document.getElementById("nav-users").classList.toggle("hidden", !me.is_owner);
+}
+
+async function init() {
+  const me = await checkAuth();
+  if (!me) return renderAuthScreen();
+  CURRENT_USER = me;
+  setupHeader(me);
+  render();
   refreshBadges();
-  if (currentView === "inbox") loadThread();
-  else if (currentView === "workshop") loadWorkshop();
-  else if (["dashboard", "activity", "approvals", "tasks", "org"].includes(currentView)) render();
-}, 5000);
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(() => {
+    refreshBadges();
+    if (currentView === "inbox") loadThread();
+    else if (currentView === "workshop") loadWorkshop();
+    else if (["dashboard", "activity", "approvals", "tasks", "org"].includes(currentView)) render();
+  }, 5000);
+}
+
+// ---------- Nutzer & Teilen (Owner) ----------
+async function renderUsers() {
+  const users = await api.get("/api/users");
+  root.innerHTML = `
+    <div class="card" style="margin-bottom:14px"><h3><i data-lucide="user-plus"></i> Neuen Nutzer anlegen</h3>
+      <input id="nu-name" placeholder="Benutzername"/>
+      <input id="nu-pass" type="password" placeholder="Passwort (min. 6 Zeichen)"/>
+      <button class="btn" id="nu-add"><i data-lucide="plus"></i> Nutzer anlegen</button>
+      <span class="muted" id="nu-status" style="margin-left:8px"></span>
+      <div class="tag" style="margin-top:8px">Jeder neue Nutzer bekommt eine eigene, getrennte Firma.</div>
+    </div>
+    <div class="card"><h3><i data-lucide="users"></i> Nutzer</h3>
+      ${users.map(u => `<div class="agent-row">
+        <div class="avatar role-${u.is_owner ? 'ceo' : 'planner'}">${initials(u.username)}</div>
+        <div class="info"><b>${esc(u.username)}</b><small>${u.is_owner ? "Owner" : "Nutzer"}</small></div>
+        ${u.is_owner ? "" : (u.has_access_to_my_firm
+          ? `<span class="pill employed">Zugriff auf deine Firma</span><button class="btn ghost sm" onclick="unshare(${u.id})">entziehen</button>`
+          : `<button class="btn ghost sm" onclick="shareWith('${esc(u.username)}')"><i data-lucide="share-2"></i> meine Firma teilen</button>`)}
+        ${u.is_owner ? "" : `<button class="btn ghost sm" onclick="resetPw(${u.id}, '${esc(u.username)}')"><i data-lucide="key-round"></i> Passwort</button>`}
+      </div>`).join("")}
+    </div>`;
+  icons();
+  document.getElementById("nu-add").onclick = async () => {
+    const r = await fetch("/api/users", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: document.getElementById("nu-name").value.trim(), password: document.getElementById("nu-pass").value }) });
+    const d = await r.json().catch(() => ({}));
+    document.getElementById("nu-status").textContent = r.status === 200 ? "✓ angelegt" : ("✕ " + (d.detail || "Fehler"));
+    if (r.status === 200) renderUsers();
+  };
+}
+window.shareWith = async (username) => { await api.post("/api/access", { username }); renderUsers(); };
+window.unshare = async (uid) => { await fetch("/api/access/" + uid, { method: "DELETE" }); renderUsers(); };
+window.resetPw = async (uid, name) => {
+  const pw = prompt("Neues Passwort für " + name + " (min. 6 Zeichen):");
+  if (!pw) return;
+  const r = await fetch(`/api/users/${uid}/reset-password`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ new_password: pw }) });
+  alert(r.status === 200 ? "Passwort gesetzt." : "Fehler.");
+};
+
+init();

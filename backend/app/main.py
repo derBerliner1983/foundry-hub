@@ -3,17 +3,20 @@ import asyncio
 import json
 import os
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import assistant as assistant_mod
+from . import auth
+from . import context
 from . import email_util
 from . import mcp_client
 from . import ollama_admin
 from . import orchestrator as orch
 from . import providers
+from . import secrets as secrets_mod
 from . import workspace
 from .config import config
 from .database import Base, SessionLocal, engine
@@ -48,12 +51,47 @@ async def startup():
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
-        ensure_seed(db)
+        # Pro vorhandenem Nutzer dessen Firma initialisieren
+        from .models import User
+        users = db.query(User).all()
+        for u in users:
+            ensure_seed(db, u.id)
     finally:
         db.close()
+    secrets_mod.apply_to_environ()  # GUI-Zugangsdaten (Owner) für Subprozesse
     asyncio.create_task(orchestrator_loop())
     asyncio.create_task(_startup_ollama())
     asyncio.create_task(_startup_mcp())
+
+
+# Öffentliche Pfade (ohne Login erreichbar)
+_PUBLIC = {"/api/health", "/api/auth/login", "/api/auth/setup",
+           "/api/auth/status", "/api/auth/me"}
+
+
+def _harden(resp, https: bool):
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "SAMEORIGIN"
+    resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    if https:
+        resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return resp
+
+
+@app.middleware("http")
+async def auth_and_tenant(request, call_next):
+    path = request.url.path
+    https = request.url.scheme == "https"
+    # Statische UI und öffentliche Auth-Routen frei
+    if not path.startswith("/api/") or path in _PUBLIC:
+        return _harden(await call_next(request), https)
+    ctx = auth.current(request)
+    if not ctx:
+        from fastapi.responses import JSONResponse
+        return _harden(JSONResponse({"error": "Nicht angemeldet"}, status_code=401), https)
+    context.set_tenant(ctx["tenant_id"])
+    request.state.user = ctx
+    return _harden(await call_next(request), https)
 
 
 async def _startup_mcp():
@@ -115,6 +153,7 @@ def agent_dict(db, a: Agent):
         "id": a.id, "name": a.name, "role": a.role, "title": role_title(a.role),
         "provider": a.provider, "model": a.model, "status": a.status,
         "manager_id": a.manager_id, "project_id": a.project_id,
+        "stuck": a.stuck,
         "rating": orch.avg_rating(db, a.id),
         "rating_count": db.query(Rating).filter(Rating.ratee_agent_id == a.id).count(),
     }
@@ -197,6 +236,10 @@ class SettingsUpdate(BaseModel):
     require_approval_fire: bool | None = None
     fire_threshold: float | None = None
     enable_code_exec: bool | None = None
+    budget_limit: float | None = None
+    thinking_mode: str | None = None
+    require_verification: bool | None = None
+    incremental_mode: bool | None = None
     schedule_mode: str | None = None
     active_from: int | None = None
     active_to: int | None = None
@@ -222,6 +265,208 @@ def health():
     return {"status": "ok", "providers": providers.available_providers()}
 
 
+# --------------------------------------------------------------------------- #
+# Authentifizierung & Nutzerverwaltung
+# --------------------------------------------------------------------------- #
+class Credentials(BaseModel):
+    username: str
+    password: str
+
+
+class ShareIn(BaseModel):
+    username: str
+
+
+class SwitchIn(BaseModel):
+    tenant_id: int
+
+
+def _set_cookie(resp: Response, token: str, secure: bool):
+    resp.set_cookie(auth.COOKIE, token, httponly=True, samesite="lax",
+                    secure=secure, max_age=auth.SESSION_DAYS * 86400)
+
+
+@app.get("/api/auth/status")
+def auth_status():
+    return {"needs_setup": not auth.has_users()}
+
+
+@app.post("/api/auth/setup")
+def auth_setup(c: Credentials, request: Request, response: Response):
+    """Erstellt das Owner-Konto – nur möglich, solange es noch keine Nutzer gibt."""
+    if auth.has_users():
+        raise HTTPException(403, "Setup bereits abgeschlossen")
+    if len(c.password) < 6:
+        raise HTTPException(400, "Passwort zu kurz (min. 6 Zeichen)")
+    uid, err = auth.create_user(c.username, c.password, is_owner=True)
+    if err:
+        raise HTTPException(400, err)
+    db = SessionLocal()
+    try:
+        ensure_seed(db, uid)
+    finally:
+        db.close()
+    token, _ = auth.login(c.username, c.password)
+    _set_cookie(response, token, request.url.scheme == "https")
+    return {"ok": True, "owner": True}
+
+
+@app.post("/api/auth/login")
+def auth_login(c: Credentials, request: Request, response: Response):
+    token, err = auth.login(c.username, c.password)
+    if err == "locked":
+        raise HTTPException(429, "Zu viele Fehlversuche – kurz warten und erneut versuchen")
+    if not token:
+        raise HTTPException(401, "Benutzername oder Passwort falsch")
+    _set_cookie(response, token, request.url.scheme == "https")
+    return {"ok": True}
+
+
+class PasswordChange(BaseModel):
+    old_password: str
+    new_password: str
+
+
+class PasswordReset(BaseModel):
+    new_password: str
+
+
+@app.post("/api/auth/password")
+def change_own_password(p: PasswordChange, request: Request):
+    ctx = auth.current(request)
+    if not ctx:
+        raise HTTPException(401, "Nicht angemeldet")
+    ok, err = auth.change_password(ctx["user_id"], p.old_password, p.new_password)
+    if not ok:
+        raise HTTPException(400, err)
+    return {"ok": True}
+
+
+@app.post("/api/users/{user_id}/reset-password")
+def reset_user_password(user_id: int, p: PasswordReset, request: Request):
+    _require_owner(request)
+    ok, err = auth.reset_password(user_id, p.new_password)
+    if not ok:
+        raise HTTPException(400, err)
+    return {"ok": True}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request, response: Response):
+    ctx = auth.current(request)
+    if ctx:
+        auth.logout(ctx["token"])
+    response.delete_cookie(auth.COOKIE)
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request):
+    ctx = auth.current(request)
+    if not ctx:
+        raise HTTPException(401, "Nicht angemeldet")
+    from .models import User
+    db = SessionLocal()
+    try:
+        tenants = []
+        for tid in sorted(auth.accessible_tenants(ctx["user_id"])):
+            owner = db.get(User, tid)
+            tenants.append({"tenant_id": tid,
+                            "name": (owner.username + " (Firma)") if owner else f"Firma {tid}",
+                            "own": tid == ctx["user_id"]})
+        return {"user_id": ctx["user_id"], "username": ctx["username"],
+                "is_owner": ctx["is_owner"], "active_tenant": ctx["tenant_id"],
+                "tenants": tenants}
+    finally:
+        db.close()
+
+
+@app.post("/api/auth/switch")
+def auth_switch(s: SwitchIn, request: Request):
+    ctx = auth.current(request)
+    if not ctx:
+        raise HTTPException(401, "Nicht angemeldet")
+    if not auth.set_active_tenant(ctx["token"], s.tenant_id):
+        raise HTTPException(403, "Kein Zugriff auf diese Firma")
+    return {"ok": True}
+
+
+def _require_owner(request: Request):
+    ctx = auth.current(request)
+    if not ctx or not ctx["is_owner"]:
+        raise HTTPException(403, "Nur der Owner darf das")
+    return ctx
+
+
+@app.get("/api/users")
+def list_users(request: Request):
+    _require_owner(request)
+    from .models import User, Access
+    db = SessionLocal()
+    try:
+        owner = _require_owner(request)
+        users = db.query(User).order_by(User.id).all()
+        shared = {a.user_id for a in db.query(Access).filter(Access.tenant_id == owner["user_id"]).all()}
+        return [{"id": u.id, "username": u.username, "is_owner": u.is_owner,
+                 "has_access_to_my_firm": u.id in shared} for u in users]
+    finally:
+        db.close()
+
+
+@app.post("/api/users")
+def create_user(c: Credentials, request: Request):
+    _require_owner(request)
+    if len(c.password) < 6:
+        raise HTTPException(400, "Passwort zu kurz (min. 6 Zeichen)")
+    uid, err = auth.create_user(c.username, c.password, is_owner=False)
+    if err:
+        raise HTTPException(400, err)
+    db = SessionLocal()
+    try:
+        ensure_seed(db, uid)   # eigene Firma für den neuen Nutzer
+    finally:
+        db.close()
+    return {"ok": True, "id": uid}
+
+
+@app.post("/api/access")
+def share_firm(s: ShareIn, request: Request):
+    """Owner teilt SEINE Firma mit einem anderen Nutzer."""
+    owner = _require_owner(request)
+    ok, msg = auth.grant_access(owner["user_id"], s.username)
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"ok": True, "note": msg}
+
+
+@app.delete("/api/access/{user_id}")
+def unshare_firm(user_id: int, request: Request):
+    owner = _require_owner(request)
+    auth.revoke_access(owner["user_id"], user_id)
+    return {"ok": True}
+
+
+@app.get("/api/secrets")
+def get_secrets():
+    """Status aller Zugangsdaten (nie die Werte selbst)."""
+    return secrets_mod.status()
+
+
+@app.post("/api/secrets")
+def set_secrets(values: dict):
+    """Setzt Zugangsdaten aus der GUI. Leerer Wert = unverändert lassen.
+    Wert '__CLEAR__' = löschen (wieder auf .env/Default zurückfallen)."""
+    for key, val in values.items():
+        if key not in secrets_mod.KEYS:
+            continue
+        if val == "__CLEAR__":
+            secrets_mod.set_value(key, "")
+        elif val not in (None, ""):
+            secrets_mod.set_value(key, str(val))
+    secrets_mod.apply_to_environ()
+    return {"ok": True, "status": secrets_mod.status()}
+
+
 @app.post("/api/run-now")
 async def run_now(steps: int = 6):
     """Lässt die KI sofort prüfen/arbeiten – ignoriert den Zeitplan (manueller Anstoß)."""
@@ -245,10 +490,10 @@ def dashboard():
     db = SessionLocal()
     try:
         now_ = datetime.utcnow()
-        projects = db.query(Project).filter(Project.status == "active").order_by(Project.id.desc()).all()
-        agents = db.query(Agent).filter(Agent.status == "employed").all()
-        all_tasks = db.query(Task).all()
-        all_ms = db.query(Milestone).all()
+        projects = db.query(Project).filter(Project.status == "active", Project.tenant_id == context.tid()).order_by(Project.id.desc()).all()
+        agents = db.query(Agent).filter(Agent.status == "employed", Agent.tenant_id == context.tid()).all()
+        all_tasks = db.query(Task).filter(Task.tenant_id == context.tid()).all()
+        all_ms = db.query(Milestone).filter(Milestone.tenant_id == context.tid()).all()
 
         def proj_card(p):
             ptasks = [t for t in all_tasks if t.project_id == p.id]
@@ -271,14 +516,16 @@ def dashboard():
                                    "due_date": m.due_date.isoformat(), "days_over": days_over})
 
         questions = (db.query(Message)
-                     .filter(Message.recipient_kind == "user",
+                     .filter(Message.tenant_id == context.tid(),
+                             Message.recipient_kind == "user",
                              Message.requires_answer == True,  # noqa: E712
                              Message.answered == False)  # noqa: E712
                      .order_by(Message.id.desc()).limit(10).all())
         approvals = (db.query(PendingApproval)
-                     .filter(PendingApproval.status == "pending")
+                     .filter(PendingApproval.status == "pending",
+                             PendingApproval.tenant_id == context.tid())
                      .order_by(PendingApproval.id).all())
-        events = db.query(Event).order_by(Event.id.desc()).limit(8).all()
+        events = db.query(Event).filter(Event.tenant_id == context.tid()).order_by(Event.id.desc()).limit(8).all()
 
         td_all = sum(1 for t in all_tasks if t.status == "done")
         return {
@@ -309,17 +556,19 @@ def dashboard():
 def state():
     db = SessionLocal()
     try:
-        chef = db.query(Agent).filter(Agent.role == "ceo").first()
-        agents = db.query(Agent).order_by(Agent.id).all()
+        chef = db.query(Agent).filter(Agent.role == "ceo", Agent.tenant_id == context.tid()).first()
+        agents = db.query(Agent).filter(Agent.tenant_id == context.tid()).order_by(Agent.id).all()
         return {
             "chef_id": chef.id if chef else None,
             "agents": [agent_dict(db, a) for a in agents],
             "open_questions": db.query(Message).filter(
+                Message.tenant_id == context.tid(),
                 Message.recipient_kind == "user",
                 Message.requires_answer == True,  # noqa: E712
                 Message.answered == False).count(),  # noqa: E712
             "pending_approvals": db.query(PendingApproval).filter(
-                PendingApproval.status == "pending").count(),
+                PendingApproval.status == "pending",
+                PendingApproval.tenant_id == context.tid()).count(),
         }
     finally:
         db.close()
@@ -330,7 +579,7 @@ def create_request(req: NewRequest):
     """Neue Anfrage des Nutzers an den Chef."""
     db = SessionLocal()
     try:
-        chef = ensure_seed(db)
+        chef = ensure_seed(db, context.tid())
         project = Project(title=req.title, description=req.description)
         db.add(project)
         db.flush()
@@ -352,12 +601,19 @@ def post_message(m: UserMessage):
     db = SessionLocal()
     try:
         if m.to_agent_id is None:
-            chef = db.query(Agent).filter(Agent.role == "ceo").first()
+            chef = db.query(Agent).filter(Agent.role == "ceo", Agent.tenant_id == context.tid()).first()
             target_id = chef.id if chef else None
         else:
             target_id = m.to_agent_id
         if not target_id:
             raise HTTPException(404, "Kein Empfänger")
+        # Empfänger muss zur eigenen Firma gehören
+        ta = db.get(Agent, target_id)
+        if not ta or ta.tenant_id != context.tid():
+            raise HTTPException(404, "Empfänger nicht gefunden")
+        if ta and ta.stuck:
+            ta.stuck = False
+            orch.log(db, "info", f"{ta.name} durch Nutzer fortgesetzt", agent_id=ta.id)
         # offene Rückfragen an diesen Agenten als beantwortet markieren
         for q in db.query(Message).filter(
                 Message.sender_agent_id == target_id,
@@ -378,7 +634,7 @@ def list_messages(agent_id: int | None = None, inbox: str | None = None):
     """inbox=user -> Nachrichten an den Nutzer. agent_id -> Thread mit einem Agenten."""
     db = SessionLocal()
     try:
-        q = db.query(Message)
+        q = db.query(Message).filter(Message.tenant_id == context.tid())
         if inbox == "user":
             q = q.filter(Message.recipient_kind == "user")
         elif agent_id is not None:
@@ -392,12 +648,28 @@ def list_messages(agent_id: int | None = None, inbox: str | None = None):
         db.close()
 
 
+@app.post("/api/agents/{agent_id}/resume")
+def resume_agent(agent_id: int):
+    """Setzt einen automatisch gestoppten (festsitzenden) Agenten fort."""
+    db = SessionLocal()
+    try:
+        a = db.get(Agent, agent_id)
+        if not a or a.tenant_id != context.tid():
+            raise HTTPException(404, "Agent nicht gefunden")
+        a.stuck = False
+        orch.log(db, "info", f"{a.name} fortgesetzt", agent_id=a.id)
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
 @app.get("/api/agents/{agent_id}")
 def get_agent(agent_id: int):
     db = SessionLocal()
     try:
         a = db.get(Agent, agent_id)
-        if not a:
+        if not a or a.tenant_id != context.tid():
             raise HTTPException(404, "Agent nicht gefunden")
         data = agent_dict(db, a)
         data["reports"] = [agent_dict(db, r) for r in
@@ -417,7 +689,7 @@ def get_agent(agent_id: int):
 def list_tasks():
     db = SessionLocal()
     try:
-        tasks = db.query(Task).order_by(Task.id.desc()).limit(200).all()
+        tasks = db.query(Task).filter(Task.tenant_id == context.tid()).order_by(Task.id.desc()).limit(200).all()
         return [{"id": t.id, "title": t.title, "description": t.description,
                  "status": t.status, "assigned_agent_id": t.assigned_agent_id,
                  "milestone_id": t.milestone_id, "result": t.result} for t in tasks]
@@ -443,7 +715,8 @@ def list_approvals():
     db = SessionLocal()
     try:
         items = db.query(PendingApproval).filter(
-            PendingApproval.status == "pending").order_by(PendingApproval.id).all()
+            PendingApproval.status == "pending",
+            PendingApproval.tenant_id == context.tid()).order_by(PendingApproval.id).all()
         return [{"id": a.id, "summary": a.summary,
                  "action": json.loads(a.action_json)} for a in items]
     finally:
@@ -455,7 +728,7 @@ def decide_approval(approval_id: int, decision: str):
     db = SessionLocal()
     try:
         ap = db.get(PendingApproval, approval_id)
-        if not ap or ap.status != "pending":
+        if not ap or ap.tenant_id != context.tid() or ap.status != "pending":
             raise HTTPException(404, "Freigabe nicht gefunden")
         action = json.loads(ap.action_json)
         if decision == "approve":
@@ -481,7 +754,7 @@ def decide_approval(approval_id: int, decision: str):
 def list_events():
     db = SessionLocal()
     try:
-        evs = db.query(Event).order_by(Event.id.desc()).limit(100).all()
+        evs = db.query(Event).filter(Event.tenant_id == context.tid()).order_by(Event.id.desc()).limit(100).all()
         out = []
         for e in evs:
             name = ""
@@ -512,6 +785,10 @@ def get_settings():
             "require_approval_fire": s.require_approval_fire,
             "fire_threshold": s.fire_threshold,
             "enable_code_exec": s.enable_code_exec,
+            "budget_limit": s.budget_limit,
+            "thinking_mode": s.thinking_mode,
+            "require_verification": s.require_verification,
+            "incremental_mode": s.incremental_mode,
             "schedule_mode": s.schedule_mode,
             "active_from": s.active_from,
             "active_to": s.active_to,
@@ -535,10 +812,38 @@ def update_settings(upd: SettingsUpdate):
     db = SessionLocal()
     try:
         s = orch.get_settings(db)
-        for field, value in upd.model_dump(exclude_none=True).items():
+        data = upd.model_dump(exclude_none=True)
+        if "budget_limit" in data:
+            s.budget_notified = False  # bei neuem Budget Pausierung aufheben
+        for field, value in data.items():
             setattr(s, field, value)
         db.commit()
         return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.get("/api/budget")
+def budget():
+    """Verbrauch (USD) der aktuellen Firma – gesamt, je Modell, je Projekt."""
+    from .models import Usage
+    db = SessionLocal()
+    try:
+        s = orch.get_settings(db)
+        rows = db.query(Usage).filter(Usage.tenant_id == context.tid()).all()
+        total = round(sum(r.cost for r in rows), 4)
+        in_tok = sum(r.input_tokens for r in rows)
+        out_tok = sum(r.output_tokens for r in rows)
+        by_model = {}
+        for r in rows:
+            by_model.setdefault(r.model, 0.0)
+            by_model[r.model] += r.cost
+        return {"spent": total, "limit": s.budget_limit or 0.0,
+                "input_tokens": in_tok, "output_tokens": out_tok,
+                "calls": len(rows),
+                "by_model": [{"model": k, "cost": round(v, 4)} for k, v in
+                             sorted(by_model.items(), key=lambda x: -x[1])],
+                "paused": bool(s.budget_limit and total >= s.budget_limit > 0)}
     finally:
         db.close()
 
@@ -551,7 +856,7 @@ def list_projects():
     db = SessionLocal()
     try:
         return [{"id": p.id, "title": p.title, "status": p.status}
-                for p in db.query(Project).order_by(Project.id.desc()).all()]
+                for p in db.query(Project).filter(Project.tenant_id == context.tid()).order_by(Project.id.desc()).all()]
     finally:
         db.close()
 
@@ -584,8 +889,8 @@ def progress(project_id: int | None = None):
     """Projekt-Fortschritt: Meilensteine, Aufgaben-Statistik, Stand."""
     db = SessionLocal()
     try:
-        msq = db.query(Milestone)
-        tq = db.query(Task)
+        msq = db.query(Milestone).filter(Milestone.tenant_id == context.tid())
+        tq = db.query(Task).filter(Task.tenant_id == context.tid())
         if project_id is not None:
             msq = msq.filter(Milestone.project_id == project_id)
             tq = tq.filter(Task.project_id == project_id)
@@ -625,7 +930,7 @@ def progress(project_id: int | None = None):
 def list_milestones(project_id: int | None = None):
     db = SessionLocal()
     try:
-        q = db.query(Milestone)
+        q = db.query(Milestone).filter(Milestone.tenant_id == context.tid())
         if project_id is not None:
             q = q.filter(Milestone.project_id == project_id)
         return [_ms_dict(m) for m in q.order_by(Milestone.order_index, Milestone.id).all()]
@@ -637,7 +942,7 @@ def list_milestones(project_id: int | None = None):
 def create_milestone(m: MilestoneIn):
     db = SessionLocal()
     try:
-        n = db.query(Milestone).filter(Milestone.project_id == m.project_id).count()
+        n = db.query(Milestone).filter(Milestone.project_id == m.project_id, Milestone.tenant_id == context.tid()).count()
         ms = Milestone(project_id=m.project_id, title=m.title or "Meilenstein",
                        description=m.description or "", status=m.status or "planned",
                        order_index=n, due_date=orch.parse_due(m.due_days, m.due_date))
@@ -653,7 +958,7 @@ def update_milestone(ms_id: int, m: MilestoneIn):
     db = SessionLocal()
     try:
         ms = db.get(Milestone, ms_id)
-        if not ms:
+        if not ms or ms.tenant_id != context.tid():
             raise HTTPException(404, "Meilenstein nicht gefunden")
         if m.status:
             ms.status = m.status
@@ -678,7 +983,7 @@ def delete_milestone(ms_id: int):
     db = SessionLocal()
     try:
         ms = db.get(Milestone, ms_id)
-        if ms:
+        if ms and ms.tenant_id == context.tid():
             db.delete(ms)
             db.commit()
         return {"ok": True}
@@ -691,7 +996,7 @@ def list_decisions(project_id: int | None = None, agent_id: int | None = None, l
     """Entscheidungs-Log: warum/was/wie die KI gehandelt hat."""
     db = SessionLocal()
     try:
-        q = db.query(Decision)
+        q = db.query(Decision).filter(Decision.tenant_id == context.tid())
         if project_id is not None:
             q = q.filter(Decision.project_id == project_id)
         if agent_id is not None:
@@ -720,12 +1025,79 @@ def workspace_file(path: str, project_id: int | None = None):
     return {"path": path, "content": workspace.read_file(project_id, path)}
 
 
+@app.post("/api/workspace/upload")
+async def workspace_upload(project_id: int | None = Form(None), file: UploadFile = File(...)):
+    """Lädt eine Datei in den Projekt-Workspace (für Specs, Designs, Daten)."""
+    data = await file.read()
+    try:
+        rel = workspace.save_bytes(project_id, file.filename or "upload.bin", data)
+        return {"ok": True, "path": rel, "size": len(data)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/workspace/download")
+def workspace_download(path: str, project_id: int | None = None):
+    """Lädt eine einzelne Datei herunter."""
+    try:
+        target = workspace.safe_abspath(project_id, path)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "Ungültiger Pfad")
+    if not os.path.isfile(target):
+        raise HTTPException(404, "Datei nicht gefunden")
+    return FileResponse(target, filename=os.path.basename(target))
+
+
+@app.get("/api/workspace/zip")
+def workspace_zip(project_id: int | None = None):
+    """Lädt den gesamten Projekt-Workspace als ZIP herunter."""
+    path = workspace.make_zip(project_id)
+    return FileResponse(path, filename=f"project_{project_id or 'shared'}.zip",
+                        media_type="application/zip")
+
+
+@app.get("/api/sandbox/status")
+def sandbox_status():
+    """Status des isolierten Build-Containers (Werkzeuge)."""
+    if not config.SANDBOX_URL:
+        return {"enabled": False, "reachable": False,
+                "note": "Läuft lokal im App-Container (kein isolierter Build-Container konfiguriert)."}
+    try:
+        import httpx
+        r = httpx.get(f"{config.SANDBOX_URL}/health", timeout=8)
+        d = r.json()
+        return {"enabled": True, "reachable": True, "tools": d.get("tools", {})}
+    except Exception as e:  # noqa: BLE001
+        return {"enabled": True, "reachable": False, "error": str(e)}
+
+
+@app.post("/api/sandbox/reset")
+def sandbox_reset(project_id: int | None = None):
+    return workspace.reset_workspace(project_id)
+
+
+@app.get("/api/git/history")
+def git_history(project_id: int | None = None):
+    return {"history": workspace.git_history(project_id)}
+
+
+class RollbackIn(BaseModel):
+    project_id: int | None = None
+    commit: str
+
+
+@app.post("/api/git/rollback")
+def git_rollback(r: RollbackIn):
+    res = workspace.git_rollback(r.project_id, r.commit)
+    return res
+
+
 @app.get("/api/console")
 def console(project_id: int | None = None):
     """Letzte Befehlsausführungen (aus dem Event-Log)."""
     db = SessionLocal()
     try:
-        evs = (db.query(Event).filter(Event.kind.in_(["exec", "file"]))
+        evs = (db.query(Event).filter(Event.kind.in_(["exec", "file"]), Event.tenant_id == context.tid())
                .order_by(Event.id.desc()).limit(60).all())
         return [{"id": e.id, "kind": e.kind, "text": e.text,
                  "created_at": e.created_at.isoformat()} for e in evs]
@@ -773,7 +1145,7 @@ def create_project(req: NewRequest):
     """Legt ein Projekt an und beauftragt den Chef damit."""
     db = SessionLocal()
     try:
-        chef = ensure_seed(db)
+        chef = ensure_seed(db, context.tid())
         project = Project(title=req.title, description=req.description)
         db.add(project)
         db.flush()
@@ -792,7 +1164,7 @@ def create_quicktask(req: QuickTask):
     """Einzelaufgabe (kein Projekt) direkt an die Firma/den Chef."""
     db = SessionLocal()
     try:
-        chef = ensure_seed(db)
+        chef = ensure_seed(db, context.tid())
         orch.send_message(db, sender_kind="user", sender_agent_id=None,
                           recipient_kind="agent", recipient_agent_id=chef.id,
                           subject="Einzelaufgabe: " + req.title,
@@ -819,7 +1191,7 @@ def _rule_dict(r: Rule):
 def list_rules():
     db = SessionLocal()
     try:
-        return [_rule_dict(r) for r in db.query(Rule).order_by(Rule.id.desc()).all()]
+        return [_rule_dict(r) for r in db.query(Rule).filter(Rule.tenant_id == context.tid()).order_by(Rule.id.desc()).all()]
     finally:
         db.close()
 
@@ -844,7 +1216,7 @@ def update_rule(rule_id: int, r: RuleIn):
     db = SessionLocal()
     try:
         rule = db.get(Rule, rule_id)
-        if not rule:
+        if not rule or rule.tenant_id != context.tid():
             raise HTTPException(404, "Regel nicht gefunden")
         for f, v in r.model_dump(exclude_none=True).items():
             setattr(rule, f, v)
@@ -859,7 +1231,7 @@ def delete_rule(rule_id: int):
     db = SessionLocal()
     try:
         rule = db.get(Rule, rule_id)
-        if rule:
+        if rule and rule.tenant_id == context.tid():
             db.delete(rule)
             db.commit()
         return {"ok": True}
@@ -879,7 +1251,7 @@ def _skill_dict(s: Skill):
 def list_skills():
     db = SessionLocal()
     try:
-        return [_skill_dict(s) for s in db.query(Skill).order_by(Skill.id).all()]
+        return [_skill_dict(s) for s in db.query(Skill).filter(Skill.tenant_id == context.tid()).order_by(Skill.id).all()]
     finally:
         db.close()
 
@@ -888,7 +1260,7 @@ def list_skills():
 def create_skill(s: SkillIn):
     db = SessionLocal()
     try:
-        existing = db.query(Skill).filter(Skill.name == s.name).first()
+        existing = db.query(Skill).filter(Skill.name == s.name, Skill.tenant_id == context.tid()).first()
         if existing:
             for f, v in s.model_dump(exclude_none=True).items():
                 setattr(existing, f, v)
@@ -908,7 +1280,7 @@ def delete_skill(skill_id: int):
     db = SessionLocal()
     try:
         s = db.get(Skill, skill_id)
-        if s:
+        if s and s.tenant_id == context.tid():
             db.delete(s)
             db.commit()
         return {"ok": True}
@@ -932,7 +1304,7 @@ def _mcp_dict(m: McpServer):
 def list_mcp():
     db = SessionLocal()
     try:
-        return [_mcp_dict(m) for m in db.query(McpServer).order_by(McpServer.id).all()]
+        return [_mcp_dict(m) for m in db.query(McpServer).filter(McpServer.tenant_id == context.tid()).order_by(McpServer.id).all()]
     finally:
         db.close()
 
@@ -941,7 +1313,7 @@ def list_mcp():
 def create_mcp(m: McpIn):
     db = SessionLocal()
     try:
-        existing = db.query(McpServer).filter(McpServer.name == m.name).first()
+        existing = db.query(McpServer).filter(McpServer.name == m.name, McpServer.tenant_id == context.tid()).first()
         if existing:
             for f, v in m.model_dump(exclude_none=True).items():
                 setattr(existing, f, v)
@@ -958,13 +1330,15 @@ def create_mcp(m: McpIn):
 
 
 @app.delete("/api/mcp/{mcp_id}")
-def delete_mcp(mcp_id: int):
+async def delete_mcp(mcp_id: int):
     db = SessionLocal()
     try:
         m = db.get(McpServer, mcp_id)
-        if m:
+        if m and m.tenant_id == context.tid():
+            transport, command, url = m.transport, m.command, m.url
             db.delete(m)
             db.commit()
+            await mcp_client.close_session(transport, command, url)
         return {"ok": True}
     finally:
         db.close()

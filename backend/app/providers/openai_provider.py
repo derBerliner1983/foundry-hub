@@ -1,6 +1,7 @@
 """OpenAI Provider (Chat Completions, REST)."""
 import httpx
 
+from .. import secrets
 from ..config import config
 from .base import BaseProvider, LLMResult, MockProvider
 
@@ -9,7 +10,7 @@ class OpenAIProvider(BaseProvider):
     name = "openai"
 
     def available(self) -> bool:
-        return bool(config.OPENAI_API_KEY)
+        return bool(secrets.provider_key("openai"))
 
     async def chat(self, model: str, system: str, messages: list) -> LLMResult:
         if not self.available():
@@ -19,7 +20,7 @@ class OpenAIProvider(BaseProvider):
 
         url = f"{config.OPENAI_BASE_URL}/v1/chat/completions"
         headers = {
-            "Authorization": f"Bearer {config.OPENAI_API_KEY}",
+            "Authorization": f"Bearer {secrets.provider_key('openai')}",
             "content-type": "application/json",
         }
         full = [{"role": "system", "content": system}] + messages
@@ -30,7 +31,10 @@ class OpenAIProvider(BaseProvider):
                 r.raise_for_status()
                 data = r.json()
                 text = data["choices"][0]["message"]["content"]
-                return LLMResult(text, self.name, model)
+                u = data.get("usage", {})
+                return LLMResult(text, self.name, model,
+                                 input_tokens=u.get("prompt_tokens", 0),
+                                 output_tokens=u.get("completion_tokens", 0))
         except Exception as e:  # noqa: BLE001
             if config.ALLOW_MOCK_FALLBACK:
                 return await MockProvider().chat(model, system, messages)
