@@ -712,7 +712,8 @@ async function renderKnowledge() {
       <input id="kn-title" placeholder="Titel (z. B. Markenrichtlinie, API-Doku)"/>
       <textarea id="kn-content" placeholder="Inhalt/Notiz, den die Agenten durchsuchen können …"></textarea>
       <div class="row"><button class="btn" id="kn-add"><i data-lucide="plus"></i> Speichern</button>
-        <button class="btn ghost" id="kn-up"><i data-lucide="upload"></i> Datei hochladen (txt/md/code)</button>
+        <button class="btn ghost" id="kn-up"><i data-lucide="upload"></i> Datei (txt/md/pdf/docx)</button>
+        <button class="btn ghost" id="kn-web"><i data-lucide="globe"></i> Webseite einlesen</button>
         <button class="btn ghost" id="kn-reindex" title="Embeddings neu berechnen"><i data-lucide="sparkles"></i> Vektor-Index</button>
         <input type="file" id="kn-file" class="hidden"/></div>
       <span class="muted" id="kn-idxstatus"></span>
@@ -751,6 +752,17 @@ async function renderKnowledge() {
     const f = e.target.files[0]; if (!f) return;
     const fd = new FormData(); fd.append("file", f);
     await fetch("/api/knowledge/upload", { method: "POST", body: fd });
+    renderKnowledge();
+  };
+  document.getElementById("kn-web").onclick = async () => {
+    const url = prompt("URL der Webseite, die eingelesen werden soll:");
+    if (!url) return;
+    const st = document.getElementById("kn-idxstatus");
+    st.textContent = "lese Webseite …";
+    try {
+      const r = await api.post("/api/knowledge/web", { url });
+      st.textContent = r && r.ok ? `✓ „${r.title || url}" gespeichert` : "Konnte Seite nicht laden";
+    } catch (_) { st.textContent = "Fehler beim Laden der Seite"; }
     renderKnowledge();
   };
 }
@@ -904,7 +916,8 @@ async function renderSettings() {
   const maxCost = Math.max(0.0001, ...hist.series.map(p => p.cost));
   const chart = hist.series.length ? `<div class="row" style="align-items:flex-end;gap:3px;height:60px;margin-top:8px">` +
     hist.series.map(p => `<div title="${p.date}: $${p.cost.toFixed(4)}" style="flex:1;background:var(--accent);height:${Math.max(2, Math.round(100 * p.cost / maxCost))}%"></div>`).join("") + `</div>` : "";
-  const provOpts = (sel) => ["claude", "openai", "ollama"].map(p => `<option ${sel === p ? "selected" : ""} value="${p}">${p}${s.providers_available[p] ? "" : " (kein Key → Mock)"}</option>`).join("");
+  const provList = Object.keys(s.providers_available).filter(p => p !== "mock");
+  const provOpts = (sel) => provList.map(p => `<option ${sel === p ? "selected" : ""} value="${p}">${p}${s.providers_available[p] ? "" : " (kein Key → Mock)"}</option>`).join("");
   const autoOpts = { full: "Voll autonom (keine Rückfragen)", ask_for_hiring: "Nachfragen bei Einstellung/Kündigung", ask_for_everything: "Bei allem Wichtigen nachfragen" };
   const schedOpts = { always: "Dauerbetrieb (immer)", window: "Nur in einem Zeitfenster", manual: "Nur manuell (auf Knopfdruck)" };
   root.innerHTML = `
@@ -1006,6 +1019,11 @@ async function renderSettings() {
       ${secField(sec, "OPENAI_API_KEY", "OpenAI API-Key")}
       ${secField(sec, "BRAVE_API_KEY", "Brave Search API-Key (optional)")}
       ${secField(sec, "GITHUB_TOKEN", "GitHub Token (für Repo/Push)")}
+      ${secField(sec, "OPENROUTER_API_KEY", "OpenRouter API-Key")}
+      ${secField(sec, "MISTRAL_API_KEY", "Mistral API-Key")}
+      ${secField(sec, "GEMINI_API_KEY", "Google Gemini API-Key")}
+      ${secField(sec, "SLACK_WEBHOOK", "Slack Incoming-Webhook URL")}
+      ${secField(sec, "DISCORD_WEBHOOK", "Discord Webhook URL")}
       <hr style="border-color:var(--border);margin:12px 0"/>
       <div class="stat-label" style="margin-bottom:6px">E-Mail senden (SMTP)</div>
       ${secField(sec, "SMTP_HOST", "SMTP-Server (z. B. smtp.gmail.com)")}
@@ -1032,6 +1050,8 @@ async function renderSettings() {
       <div class="row" style="margin-top:6px"><div class="toggle" id="s-notif"><div class="switch ${s.email_notifications ? 'on' : ''}"></div> E-Mail-Benachrichtigungen aktiv</div></div>
       <div class="row" style="margin-top:8px"><div class="toggle" id="s-novd"><div class="switch ${s.notify_overdue ? 'on' : ''}"></div> bei Verzug</div></div>
       <div class="row" style="margin-top:8px"><div class="toggle" id="s-noq"><div class="switch ${s.notify_questions ? 'on' : ''}"></div> bei neuen Rückfragen</div></div>
+      <div class="row" style="margin-top:8px"><div class="toggle" id="s-digest"><div class="switch ${s.daily_digest ? 'on' : ''}"></div> Täglicher Überblick per Mail</div>
+        <button class="btn ghost sm" id="s-digestnow" style="margin-left:10px">jetzt senden</button></div>
       <hr style="border-color:var(--border);margin:12px 0"/>
       <div class="row"><div class="toggle" id="s-aimail"><div class="switch ${s.assistant_email_access ? 'on' : ''}"></div> <b>Daily-Assistent darf meine E-Mails lesen</b></div></div>
       <hr style="border-color:var(--border);margin:12px 0"/>
@@ -1053,7 +1073,7 @@ async function renderSettings() {
     await api.post("/api/ollama/pull", { name: n }); loadOllama();
   };
   const toggles = {};
-  ["s-run", "s-hire", "s-fire", "s-code", "s-verify", "s-incr", "s-review", "s-risk", "s-route", "s-notif", "s-novd", "s-noq", "s-aimail"].forEach(id => {
+  ["s-run", "s-hire", "s-fire", "s-code", "s-verify", "s-incr", "s-review", "s-risk", "s-route", "s-notif", "s-novd", "s-noq", "s-digest", "s-aimail"].forEach(id => {
     const el = document.getElementById(id);
     toggles[id] = el.querySelector(".switch").classList.contains("on");
     el.onclick = () => { const sw = el.querySelector(".switch"); sw.classList.toggle("on"); toggles[id] = sw.classList.contains("on"); };
@@ -1086,6 +1106,7 @@ async function renderSettings() {
     await api.post("/api/recurring", { title: t, interval: document.getElementById("rec-int").value });
     renderSettings();
   };
+  document.getElementById("s-digestnow").onclick = async () => { await api.post("/api/digest/send"); alert("Digest gesendet (sofern E-Mail/Telegram konfiguriert)."); };
   // Backup
   document.getElementById("bk-full").onclick = () => window.open("/api/backup/full", "_blank");
   document.getElementById("bk-export").onclick = () => window.open("/api/backup/export", "_blank");
@@ -1133,7 +1154,7 @@ async function renderSettings() {
       active_to: parseInt(document.getElementById("s-to").value || "24"),
       user_email: document.getElementById("s-uemail").value,
       email_notifications: toggles["s-notif"], notify_overdue: toggles["s-novd"],
-      notify_questions: toggles["s-noq"], assistant_email_access: toggles["s-aimail"],
+      notify_questions: toggles["s-noq"], daily_digest: toggles["s-digest"], assistant_email_access: toggles["s-aimail"],
       telegram_token: document.getElementById("s-tgtoken").value, telegram_chat_id: document.getElementById("s-tgchat").value,
       default_chef_provider: document.getElementById("s-cp").value, default_chef_model: document.getElementById("s-cm").value,
       default_worker_provider: document.getElementById("s-wp").value, default_worker_model: document.getElementById("s-wm").value,

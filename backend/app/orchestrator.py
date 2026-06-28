@@ -60,13 +60,27 @@ def maybe_notify(db, kind, subject, body):
         return
     if kind == "overdue" and not s.notify_overdue:
         return
+    import httpx
+    text = f"[AI-Hub] {subject}\n{body}"
     # Telegram (falls konfiguriert)
     if s.telegram_token and s.telegram_chat_id:
         try:
-            import httpx
             httpx.post(f"https://api.telegram.org/bot{s.telegram_token}/sendMessage",
-                       json={"chat_id": s.telegram_chat_id, "text": f"[AI-Hub] {subject}\n{body}"},
-                       timeout=10)
+                       json={"chat_id": s.telegram_chat_id, "text": text}, timeout=10)
+        except Exception:  # noqa: BLE001
+            pass
+    # Slack / Discord (Incoming Webhooks)
+    from . import secrets as _sec
+    slack = _sec.get("SLACK_WEBHOOK")
+    if slack:
+        try:
+            httpx.post(slack, json={"text": text}, timeout=10)
+        except Exception:  # noqa: BLE001
+            pass
+    discord = _sec.get("DISCORD_WEBHOOK")
+    if discord:
+        try:
+            httpx.post(discord, json={"content": text[:1900]}, timeout=10)
         except Exception:  # noqa: BLE001
             pass
     to = s.user_email or config.NOTIFY_EMAIL or config.SMTP_FROM
@@ -982,6 +996,42 @@ def _active_tenants(db, force=False, only_tenant=None) -> list:
 
 
 _tg_offset = {}  # token -> letzte update_id
+_digest_sent = {}  # tenant -> Datum des letzten Digests
+
+
+def build_digest(db, tenant_id) -> str:
+    from .models import Project, Milestone, Message
+    import datetime
+    now_ = datetime.datetime.utcnow()
+    projects = db.query(Project).filter(Project.tenant_id == tenant_id, Project.status == "active").count()
+    done = db.query(Task).filter(Task.tenant_id == tenant_id, Task.status == "done").count()
+    total = db.query(Task).filter(Task.tenant_id == tenant_id).count()
+    overdue = db.query(Milestone).filter(Milestone.tenant_id == tenant_id, Milestone.status != "done",
+                                         Milestone.due_date.isnot(None), Milestone.due_date < now_).count()
+    questions = db.query(Message).filter(Message.tenant_id == tenant_id, Message.recipient_kind == "user",
+                                         Message.requires_answer == True, Message.answered == False).count()  # noqa: E712
+    spent = tenant_spend(db, tenant_id)
+    return (f"Tagesüberblick AI-Hub\n\n"
+            f"• Projekte aktiv: {projects}\n"
+            f"• Aufgaben erledigt: {done}/{total}\n"
+            f"• Überfällige Meilensteine: {overdue}\n"
+            f"• Offene Rückfragen an dich: {questions}\n"
+            f"• Kosten bisher: ${spent:.2f}\n")
+
+
+def check_digests(db):
+    import datetime
+    today = datetime.date.today()
+    for s in db.query(Settings).all():
+        if not (s.daily_digest and s.email_notifications):
+            continue
+        if _digest_sent.get(s.tenant_id) == today:
+            continue
+        if datetime.datetime.utcnow().hour < 7:  # erst ab 7 Uhr
+            continue
+        context.set_tenant(s.tenant_id)
+        _digest_sent[s.tenant_id] = today
+        maybe_notify(db, "digest", "Tagesüberblick", build_digest(db, s.tenant_id))
 
 
 def _apply_approval(db, ap):

@@ -99,6 +99,7 @@ class Settings(Base):
     email_notifications = Column(Boolean, default=False)
     notify_overdue = Column(Boolean, default=True)
     notify_questions = Column(Boolean, default=True)
+    daily_digest = Column(Boolean, default=False)   # tägliche Zusammenfassung per Mail
     assistant_email_access = Column(Boolean, default=False)  # Daily-Assistant darf Mails lesen
 
 

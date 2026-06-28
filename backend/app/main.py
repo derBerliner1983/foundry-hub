@@ -137,6 +137,7 @@ async def orchestrator_loop():
             try:
                 orch.run_recurring(db)
                 orch.poll_telegram(db)
+                orch.check_digests(db)
                 await orch.tick(db)
                 s = orch.get_settings(db)
                 sleep_for = max(1.0, s.tick_seconds or config.TICK_INTERVAL_SECONDS)
@@ -256,6 +257,7 @@ class SettingsUpdate(BaseModel):
     email_notifications: bool | None = None
     notify_overdue: bool | None = None
     notify_questions: bool | None = None
+    daily_digest: bool | None = None
     assistant_email_access: bool | None = None
 
 
@@ -912,6 +914,7 @@ def get_settings():
             "email_notifications": s.email_notifications,
             "notify_overdue": s.notify_overdue,
             "notify_questions": s.notify_questions,
+            "daily_digest": s.daily_digest,
             "assistant_email_access": s.assistant_email_access,
             "email_status": {"smtp": email_util.smtp_configured(),
                              "imap": email_util.imap_configured()},
@@ -1793,6 +1796,17 @@ async def upload_knowledge(file: UploadFile = File(...)):
             text = "\n".join((pg.extract_text() or "") for pg in reader.pages)
         except Exception:  # noqa: BLE001
             text = ""
+    elif fn.endswith(".docx"):
+        try:
+            import io
+            import re as _re
+            import zipfile
+            with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                xml = z.read("word/document.xml").decode("utf-8", errors="replace")
+            xml = _re.sub(r"</w:p>", "\n", xml)
+            text = _re.sub(r"(?s)<[^>]+>", "", xml)
+        except Exception:  # noqa: BLE001
+            text = ""
     if not text:
         try:
             text = raw.decode("utf-8", errors="replace")
@@ -1823,6 +1837,39 @@ def reindex_knowledge():
                 n += 1
             db.commit()
         return {"ok": True, "indexed": n, "available": embeddings.available()}
+    finally:
+        db.close()
+
+
+class WebIngest(BaseModel):
+    url: str
+
+
+@app.post("/api/knowledge/web")
+def knowledge_web(w: WebIngest):
+    """Lädt eine Webseite, extrahiert den Text und legt ihn als Wissen ab."""
+    import re as _re
+    import httpx
+    from .models import Document
+    try:
+        r = httpx.get(w.url, timeout=20, follow_redirects=True,
+                      headers={"User-Agent": "ai-hub/1.0"})
+        r.raise_for_status()
+        html = r.text
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"Konnte URL nicht laden: {e}")
+    html = _re.sub(r"(?is)<(script|style).*?</\1>", " ", html)
+    text = _re.sub(r"(?s)<[^>]+>", " ", html)
+    import html as _h
+    text = _re.sub(r"\s+", " ", _h.unescape(text)).strip()[:200000]
+    title = (_re.search(r"<title>(.*?)</title>", html, _re.I | _re.S) or [None, w.url])[1].strip()[:120]
+    db = SessionLocal()
+    try:
+        doc = Document(title="🌐 " + title, content=text, source="upload",
+                       embedding=_embed_json(title, text[:8000]))
+        db.add(doc)
+        db.commit()
+        return {"ok": True, "id": doc.id, "chars": len(text), "title": title}
     finally:
         db.close()
 
@@ -1871,6 +1918,17 @@ def vault_write(n: NoteIn):
         raise HTTPException(400, "Keine Obsidian-Vault konfiguriert (OBSIDIAN_VAULT).")
     rel = vault.write_note(n.title, n.content)
     return {"ok": True, "name": rel}
+
+
+@app.post("/api/digest/send")
+def digest_send():
+    db = SessionLocal()
+    try:
+        text = orch.build_digest(db, context.tid())
+        orch.maybe_notify(db, "digest", "Tagesüberblick (manuell)", text)
+        return {"ok": True, "preview": text}
+    finally:
+        db.close()
 
 
 @app.get("/api/budget/history")

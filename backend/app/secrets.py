@@ -12,12 +12,15 @@ from .models import Secret
 # Schlüssel, die in der GUI gesetzt werden können
 KEYS = [
     "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "BRAVE_API_KEY", "GITHUB_TOKEN",
+    "OPENROUTER_API_KEY", "MISTRAL_API_KEY", "GEMINI_API_KEY",
+    "SLACK_WEBHOOK", "DISCORD_WEBHOOK",
     "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "SMTP_FROM", "SMTP_STARTTLS",
     "IMAP_HOST", "IMAP_PORT", "IMAP_USER", "IMAP_PASS", "IMAP_SSL",
 ]
 # Schlüssel mit geheimem Wert (werden nie zurückgegeben)
 SECRET_KEYS = {"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "BRAVE_API_KEY", "GITHUB_TOKEN",
-              "SMTP_PASS", "IMAP_PASS"}
+              "OPENROUTER_API_KEY", "MISTRAL_API_KEY", "GEMINI_API_KEY",
+              "SLACK_WEBHOOK", "DISCORD_WEBHOOK", "SMTP_PASS", "IMAP_PASS"}
 
 
 def _db_value(key: str) -> str:
