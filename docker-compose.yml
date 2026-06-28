@@ -1,0 +1,55 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: aihub-app
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:////data/aihub.db
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - BRAVE_API_KEY=${BRAVE_API_KEY:-}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - SMTP_STARTTLS=${SMTP_STARTTLS:-true}
+      - IMAP_HOST=${IMAP_HOST:-}
+      - IMAP_PORT=${IMAP_PORT:-993}
+      - IMAP_USER=${IMAP_USER:-}
+      - IMAP_PASS=${IMAP_PASS:-}
+      - IMAP_SSL=${IMAP_SSL:-true}
+      - NOTIFY_EMAIL=${NOTIFY_EMAIL:-}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_AUTO_MODEL=${OLLAMA_AUTO_MODEL:-llama3.2:1b}
+      - DEFAULT_CHEF_PROVIDER=${DEFAULT_CHEF_PROVIDER:-claude}
+      - DEFAULT_CHEF_MODEL=${DEFAULT_CHEF_MODEL:-claude-opus-4-8}
+      - DEFAULT_WORKER_PROVIDER=${DEFAULT_WORKER_PROVIDER:-claude}
+      - DEFAULT_WORKER_MODEL=${DEFAULT_WORKER_MODEL:-claude-sonnet-4-6}
+      - ALLOW_MOCK_FALLBACK=${ALLOW_MOCK_FALLBACK:-true}
+      - ENABLE_CODE_EXECUTION=${ENABLE_CODE_EXECUTION:-true}
+      - EXEC_TIMEOUT=${EXEC_TIMEOUT:-60}
+      - WORKSPACE_DIR=/data/workspace
+    volumes:
+      - aihub-data:/data
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  # Lokale Modelle (optional). Modelle vorher ziehen, z. B.:
+  #   docker exec -it aihub-ollama ollama pull llama3.1
+  ollama:
+    image: ollama/ollama:latest
+    container_name: aihub-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  aihub-data:
+  ollama-data:
