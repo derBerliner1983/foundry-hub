@@ -4,6 +4,7 @@ import re
 
 from sqlalchemy import func, or_
 
+from . import context
 from . import email_util
 from . import mcp_client
 from . import providers
@@ -32,10 +33,11 @@ MAX_ACTIONS_PER_TURN = 6
 # --------------------------------------------------------------------------- #
 # Hilfsfunktionen
 # --------------------------------------------------------------------------- #
-def get_settings(db) -> Settings:
-    s = db.get(Settings, 1)
+def get_settings(db, tenant_id=None) -> Settings:
+    t = tenant_id if tenant_id is not None else context.tid()
+    s = db.query(Settings).filter(Settings.tenant_id == t).first()
     if not s:
-        s = Settings(id=1)
+        s = Settings(tenant_id=t)
         db.add(s)
         db.commit()
     return s
@@ -90,7 +92,8 @@ def avg_rating(db, agent_id):
 
 def rules_for(db, agent: Agent, project_ctx) -> str:
     """Aktive Regeln, die für diesen Agenten gelten (global + Rolle + Projekt)."""
-    rules = db.query(Rule).filter(Rule.active == True).all()  # noqa: E712
+    rules = db.query(Rule).filter(Rule.active == True,  # noqa: E712
+                                  Rule.tenant_id == agent.tenant_id).all()
     out = []
     for r in rules:
         if r.scope == "global" \
@@ -101,12 +104,14 @@ def rules_for(db, agent: Agent, project_ctx) -> str:
 
 
 def skills_text(db) -> str:
-    skills = db.query(Skill).filter(Skill.enabled == True).all()  # noqa: E712
+    skills = db.query(Skill).filter(Skill.enabled == True,  # noqa: E712
+                                    Skill.tenant_id == context.tid()).all()
     return "\n".join(f"  • {s.name}: {s.description}" for s in skills)
 
 
 def mcp_text(db) -> str:
-    servers = db.query(McpServer).filter(McpServer.enabled == True).all()  # noqa: E712
+    servers = db.query(McpServer).filter(McpServer.enabled == True,  # noqa: E712
+                                         McpServer.tenant_id == context.tid()).all()
     lines = []
     for m in servers:
         try:
@@ -120,7 +125,8 @@ def mcp_text(db) -> str:
 
 
 def team_summary(db, viewer: Agent) -> str:
-    agents = db.query(Agent).filter(Agent.status == "employed").all()
+    agents = db.query(Agent).filter(Agent.status == "employed",
+                                    Agent.tenant_id == viewer.tenant_id).all()
     lines = []
     for a in agents:
         if a.id == viewer.id:
@@ -376,6 +382,7 @@ def check_overdue(db):
     overdue = (db.query(Milestone)
                .filter(Milestone.due_date.isnot(None),
                        Milestone.status != "done",
+                       Milestone.tenant_id == context.tid(),
                        Milestone.overdue_notified == False)  # noqa: E712
                .all())
     notified = 0
@@ -617,8 +624,10 @@ def _maybe_auto_fire(db, agent, settings, ratee_id):
 # --------------------------------------------------------------------------- #
 # Eine Runde (Tick)
 # --------------------------------------------------------------------------- #
-def _next_agent_to_act(db):
-    """Wählt einen beschäftigten Agenten mit offener Arbeit (Nachricht oder Aufgabe)."""
+def _next_agent_to_act(db, tenants):
+    """Wählt einen beschäftigten Agenten (aus aktiven Firmen) mit offener Arbeit."""
+    if not tenants:
+        return None
     # Agenten mit ungelesener Nachricht
     ids = [r[0] for r in db.query(Message.recipient_agent_id)
            .filter(Message.recipient_kind == "agent", Message.is_read == False)  # noqa: E712
@@ -626,7 +635,7 @@ def _next_agent_to_act(db):
     agent = (
         db.query(Agent)
         .filter(Agent.status == "employed", Agent.stuck == False,  # noqa: E712
-                Agent.id.in_(ids))
+                Agent.tenant_id.in_(tenants), Agent.id.in_(ids))
         .order_by(Agent.id)
         .first()
     ) if ids else None
@@ -635,7 +644,8 @@ def _next_agent_to_act(db):
     # Agenten mit offener Aufgabe
     task = (
         db.query(Task)
-        .filter(Task.status == "todo", Task.assigned_agent_id.isnot(None))
+        .filter(Task.status == "todo", Task.assigned_agent_id.isnot(None),
+                Task.tenant_id.in_(tenants))
         .order_by(Task.id)
         .first()
     )
@@ -647,7 +657,8 @@ def _next_agent_to_act(db):
 
 
 async def run_agent_turn(db, agent: Agent):
-    settings = get_settings(db)
+    context.set_tenant(agent.tenant_id)
+    settings = get_settings(db, agent.tenant_id)
 
     # Kontext sammeln: ungelesene Nachrichten + offene Aufgaben
     msgs = (
@@ -800,14 +811,28 @@ def within_schedule(settings) -> bool:
     return True  # always
 
 
-async def tick(db, force=False):
-    """Eine Arbeitseinheit. Gibt zurück, was passiert ist (oder None).
+def _active_tenants(db, force=False, only_tenant=None) -> list:
+    """Firmen, deren KI gerade arbeiten darf (auto_run + Zeitplan)."""
+    q = db.query(Settings)
+    if only_tenant is not None:
+        q = q.filter(Settings.tenant_id == only_tenant)
+    out = []
+    for s in q.all():
+        if force or (s.auto_run and within_schedule(s)):
+            out.append(s.tenant_id)
+    return out
+
+
+async def tick(db, force=False, only_tenant=None):
+    """Eine Arbeitseinheit über alle aktiven Firmen (oder nur only_tenant).
     force=True ignoriert den Zeitplan (für 'Jetzt prüfen')."""
-    settings = get_settings(db)
-    if not force and (not settings.auto_run or not within_schedule(settings)):
+    tenants = _active_tenants(db, force=force, only_tenant=only_tenant)
+    if not tenants:
         return None
-    check_overdue(db)  # überfällige Meilensteine melden, bevor Agenten arbeiten
-    agent = _next_agent_to_act(db)
+    for t in tenants:  # überfällige Meilensteine je Firma melden
+        context.set_tenant(t)
+        check_overdue(db)
+    agent = _next_agent_to_act(db, tenants)
     if not agent:
         return None
     return await run_agent_turn(db, agent)

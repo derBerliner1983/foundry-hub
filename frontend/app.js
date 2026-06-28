@@ -12,7 +12,7 @@ let selectedAgent = null; // null = Chef-Inbox (an Nutzer)
 
 const root = document.getElementById("view-root");
 const titleEl = document.getElementById("view-title");
-const TITLES = { dashboard: "Dashboard", inbox: "Inbox", assistant: "Daily-Assistent", projects: "Projekte", progress: "Fortschritt", org: "Team / Organisation", tasks: "Aufgaben", workshop: "Werkstatt", cookbook: "Cookbook / Regelwerk", skills: "Skills & MCP", approvals: "Freigaben", activity: "Aktivität", settings: "Einstellungen" };
+const TITLES = { dashboard: "Dashboard", inbox: "Inbox", assistant: "Daily-Assistent", projects: "Projekte", progress: "Fortschritt", org: "Team / Organisation", tasks: "Aufgaben", workshop: "Werkstatt", cookbook: "Cookbook / Regelwerk", skills: "Skills & MCP", approvals: "Freigaben", activity: "Aktivität", users: "Nutzer & Teilen", settings: "Einstellungen" };
 let wsProject = null;
 let progProject = "";
 
@@ -67,6 +67,7 @@ async function render() {
   if (currentView === "workshop") return renderWorkshop();
   if (currentView === "cookbook") return renderCookbook();
   if (currentView === "skills") return renderSkills();
+  if (currentView === "users") return renderUsers();
   if (currentView === "approvals") return renderApprovals();
   if (currentView === "activity") return renderActivity();
   if (currentView === "settings") return renderSettings();
@@ -877,12 +878,105 @@ async function refreshBadges() {
   } catch (e) { /* still */ }
 }
 
-// Initial + Polling
-render();
-refreshBadges();
-setInterval(() => {
+// ---------- Auth / Mehrbenutzer ----------
+let CURRENT_USER = null;
+let pollTimer = null;
+
+async function checkAuth() {
+  const r = await fetch("/api/auth/me");
+  return r.status === 200 ? r.json() : null;
+}
+
+async function renderAuthScreen() {
+  const st = await api.get("/api/auth/status");
+  const setup = st.needs_setup;
+  document.querySelector(".app").innerHTML = `
+    <div style="grid-column:1/-1;display:grid;place-items:center;min-height:100vh">
+      <div class="card" style="width:360px;max-width:92vw">
+        <div class="brand" style="justify-content:center"><div class="logo"><i data-lucide="bot"></i></div>
+          <div><b>AI-Hub</b><small>${setup ? "Owner-Konto einrichten" : "Anmelden"}</small></div></div>
+        <label>Benutzername</label><input id="au-user" autocomplete="username"/>
+        <label>Passwort</label><input id="au-pass" type="password" autocomplete="current-password"
+          onkeydown="if(event.key==='Enter')doAuth(${setup})"/>
+        <button class="btn" style="width:100%;justify-content:center" onclick="doAuth(${setup})">
+          <i data-lucide="${setup ? 'user-plus' : 'log-in'}"></i> ${setup ? "Konto erstellen & starten" : "Anmelden"}</button>
+        <div class="tag" id="au-err" style="color:var(--red);margin-top:10px;display:none"></div>
+        ${setup ? `<div class="tag" style="margin-top:10px">Dies wird das Owner-Konto. Weitere Nutzer legst du später unter „Nutzer & Teilen" an.</div>` : ""}
+      </div>
+    </div>`;
+  icons();
+}
+window.doAuth = async (setup) => {
+  const username = document.getElementById("au-user").value.trim();
+  const password = document.getElementById("au-pass").value;
+  const err = document.getElementById("au-err");
+  const r = await fetch(setup ? "/api/auth/setup" : "/api/auth/login", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }) });
+  if (r.status === 200) { location.reload(); }
+  else { const d = await r.json().catch(() => ({})); err.style.display = "block"; err.textContent = d.detail || d.error || "Fehlgeschlagen"; }
+};
+
+function setupHeader(me) {
+  document.getElementById("user-label").textContent = me.username + (me.is_owner ? " (Owner)" : "");
+  document.getElementById("user-label").classList.remove("hidden");
+  const lo = document.getElementById("logout-btn"); lo.classList.remove("hidden");
+  lo.onclick = async () => { await api.post("/api/auth/logout"); location.reload(); };
+  const sw = document.getElementById("tenant-switch");
+  if (me.tenants.length > 1) {
+    sw.classList.remove("hidden");
+    sw.innerHTML = me.tenants.map(t => `<option value="${t.tenant_id}" ${t.tenant_id === me.active_tenant ? "selected" : ""}>${t.own ? "Meine Firma" : esc(t.name)}</option>`).join("");
+    sw.onchange = async () => { await api.post("/api/auth/switch", { tenant_id: Number(sw.value) }); location.reload(); };
+  }
+  document.getElementById("nav-users").classList.toggle("hidden", !me.is_owner);
+}
+
+async function init() {
+  const me = await checkAuth();
+  if (!me) return renderAuthScreen();
+  CURRENT_USER = me;
+  setupHeader(me);
+  render();
   refreshBadges();
-  if (currentView === "inbox") loadThread();
-  else if (currentView === "workshop") loadWorkshop();
-  else if (["dashboard", "activity", "approvals", "tasks", "org"].includes(currentView)) render();
-}, 5000);
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(() => {
+    refreshBadges();
+    if (currentView === "inbox") loadThread();
+    else if (currentView === "workshop") loadWorkshop();
+    else if (["dashboard", "activity", "approvals", "tasks", "org"].includes(currentView)) render();
+  }, 5000);
+}
+
+// ---------- Nutzer & Teilen (Owner) ----------
+async function renderUsers() {
+  const users = await api.get("/api/users");
+  root.innerHTML = `
+    <div class="card" style="margin-bottom:14px"><h3><i data-lucide="user-plus"></i> Neuen Nutzer anlegen</h3>
+      <input id="nu-name" placeholder="Benutzername"/>
+      <input id="nu-pass" type="password" placeholder="Passwort (min. 6 Zeichen)"/>
+      <button class="btn" id="nu-add"><i data-lucide="plus"></i> Nutzer anlegen</button>
+      <span class="muted" id="nu-status" style="margin-left:8px"></span>
+      <div class="tag" style="margin-top:8px">Jeder neue Nutzer bekommt eine eigene, getrennte Firma.</div>
+    </div>
+    <div class="card"><h3><i data-lucide="users"></i> Nutzer</h3>
+      ${users.map(u => `<div class="agent-row">
+        <div class="avatar role-${u.is_owner ? 'ceo' : 'planner'}">${initials(u.username)}</div>
+        <div class="info"><b>${esc(u.username)}</b><small>${u.is_owner ? "Owner" : "Nutzer"}</small></div>
+        ${u.is_owner ? "" : (u.has_access_to_my_firm
+          ? `<span class="pill employed">Zugriff auf deine Firma</span><button class="btn ghost sm" onclick="unshare(${u.id})">entziehen</button>`
+          : `<button class="btn ghost sm" onclick="shareWith('${esc(u.username)}')"><i data-lucide="share-2"></i> meine Firma teilen</button>`)}
+      </div>`).join("")}
+    </div>`;
+  icons();
+  document.getElementById("nu-add").onclick = async () => {
+    const r = await fetch("/api/users", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: document.getElementById("nu-name").value.trim(), password: document.getElementById("nu-pass").value }) });
+    const d = await r.json().catch(() => ({}));
+    document.getElementById("nu-status").textContent = r.status === 200 ? "✓ angelegt" : ("✕ " + (d.detail || "Fehler"));
+    if (r.status === 200) renderUsers();
+  };
+}
+window.shareWith = async (username) => { await api.post("/api/access", { username }); renderUsers(); };
+window.unshare = async (uid) => { await fetch("/api/access/" + uid, { method: "DELETE" }); renderUsers(); };
+
+init();

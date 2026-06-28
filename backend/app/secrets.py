@@ -4,6 +4,7 @@ Priorität: in der GUI gesetzter Wert > Umgebungsvariable. So muss nichts in die
 .env eingetragen werden – die App erkennt selbst, was konfiguriert ist."""
 import os
 
+from . import context
 from .config import config
 from .database import SessionLocal
 from .models import Secret
@@ -21,7 +22,8 @@ SECRET_KEYS = {"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "BRAVE_API_KEY", "SMTP_PAS
 def _db_value(key: str) -> str:
     db = SessionLocal()
     try:
-        s = db.get(Secret, key)
+        s = (db.query(Secret)
+             .filter(Secret.tenant_id == context.tid(), Secret.key == key).first())
         return (s.value or "").strip() if s else ""
     finally:
         db.close()
@@ -54,9 +56,10 @@ def set_value(key: str, value: str):
         return
     db = SessionLocal()
     try:
-        s = db.get(Secret, key)
+        s = (db.query(Secret)
+             .filter(Secret.tenant_id == context.tid(), Secret.key == key).first())
         if s is None:
-            s = Secret(key=key, value=value or "")
+            s = Secret(tenant_id=context.tid(), key=key, value=value or "")
             db.add(s)
         else:
             s.value = value or ""

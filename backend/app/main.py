@@ -3,12 +3,14 @@ import asyncio
 import json
 import os
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import assistant as assistant_mod
+from . import auth
+from . import context
 from . import email_util
 from . import mcp_client
 from . import ollama_admin
@@ -49,13 +51,37 @@ async def startup():
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
-        ensure_seed(db)
+        # Pro vorhandenem Nutzer dessen Firma initialisieren
+        from .models import User
+        users = db.query(User).all()
+        for u in users:
+            ensure_seed(db, u.id)
     finally:
         db.close()
-    secrets_mod.apply_to_environ()  # GUI-Zugangsdaten für Subprozesse verfügbar machen
+    secrets_mod.apply_to_environ()  # GUI-Zugangsdaten (Owner) für Subprozesse
     asyncio.create_task(orchestrator_loop())
     asyncio.create_task(_startup_ollama())
     asyncio.create_task(_startup_mcp())
+
+
+# Öffentliche Pfade (ohne Login erreichbar)
+_PUBLIC = {"/api/health", "/api/auth/login", "/api/auth/setup",
+           "/api/auth/status", "/api/auth/me"}
+
+
+@app.middleware("http")
+async def auth_and_tenant(request, call_next):
+    path = request.url.path
+    # Statische UI/__ und öffentliche Auth-Routen frei
+    if not path.startswith("/api/") or path in _PUBLIC:
+        return await call_next(request)
+    ctx = auth.current(request)
+    if not ctx:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "Nicht angemeldet"}, status_code=401)
+    context.set_tenant(ctx["tenant_id"])
+    request.state.user = ctx
+    return await call_next(request)
 
 
 async def _startup_mcp():
@@ -225,6 +251,156 @@ def health():
     return {"status": "ok", "providers": providers.available_providers()}
 
 
+# --------------------------------------------------------------------------- #
+# Authentifizierung & Nutzerverwaltung
+# --------------------------------------------------------------------------- #
+class Credentials(BaseModel):
+    username: str
+    password: str
+
+
+class ShareIn(BaseModel):
+    username: str
+
+
+class SwitchIn(BaseModel):
+    tenant_id: int
+
+
+def _set_cookie(resp: Response, token: str, secure: bool):
+    resp.set_cookie(auth.COOKIE, token, httponly=True, samesite="lax",
+                    secure=secure, max_age=auth.SESSION_DAYS * 86400)
+
+
+@app.get("/api/auth/status")
+def auth_status():
+    return {"needs_setup": not auth.has_users()}
+
+
+@app.post("/api/auth/setup")
+def auth_setup(c: Credentials, request: Request, response: Response):
+    """Erstellt das Owner-Konto – nur möglich, solange es noch keine Nutzer gibt."""
+    if auth.has_users():
+        raise HTTPException(403, "Setup bereits abgeschlossen")
+    if len(c.password) < 6:
+        raise HTTPException(400, "Passwort zu kurz (min. 6 Zeichen)")
+    uid, err = auth.create_user(c.username, c.password, is_owner=True)
+    if err:
+        raise HTTPException(400, err)
+    db = SessionLocal()
+    try:
+        ensure_seed(db, uid)
+    finally:
+        db.close()
+    token = auth.login(c.username, c.password)
+    _set_cookie(response, token, request.url.scheme == "https")
+    return {"ok": True, "owner": True}
+
+
+@app.post("/api/auth/login")
+def auth_login(c: Credentials, request: Request, response: Response):
+    token = auth.login(c.username, c.password)
+    if not token:
+        raise HTTPException(401, "Benutzername oder Passwort falsch")
+    _set_cookie(response, token, request.url.scheme == "https")
+    return {"ok": True}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request, response: Response):
+    ctx = auth.current(request)
+    if ctx:
+        auth.logout(ctx["token"])
+    response.delete_cookie(auth.COOKIE)
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request):
+    ctx = auth.current(request)
+    if not ctx:
+        raise HTTPException(401, "Nicht angemeldet")
+    from .models import User
+    db = SessionLocal()
+    try:
+        tenants = []
+        for tid in sorted(auth.accessible_tenants(ctx["user_id"])):
+            owner = db.get(User, tid)
+            tenants.append({"tenant_id": tid,
+                            "name": (owner.username + " (Firma)") if owner else f"Firma {tid}",
+                            "own": tid == ctx["user_id"]})
+        return {"user_id": ctx["user_id"], "username": ctx["username"],
+                "is_owner": ctx["is_owner"], "active_tenant": ctx["tenant_id"],
+                "tenants": tenants}
+    finally:
+        db.close()
+
+
+@app.post("/api/auth/switch")
+def auth_switch(s: SwitchIn, request: Request):
+    ctx = auth.current(request)
+    if not ctx:
+        raise HTTPException(401, "Nicht angemeldet")
+    if not auth.set_active_tenant(ctx["token"], s.tenant_id):
+        raise HTTPException(403, "Kein Zugriff auf diese Firma")
+    return {"ok": True}
+
+
+def _require_owner(request: Request):
+    ctx = auth.current(request)
+    if not ctx or not ctx["is_owner"]:
+        raise HTTPException(403, "Nur der Owner darf das")
+    return ctx
+
+
+@app.get("/api/users")
+def list_users(request: Request):
+    _require_owner(request)
+    from .models import User, Access
+    db = SessionLocal()
+    try:
+        owner = _require_owner(request)
+        users = db.query(User).order_by(User.id).all()
+        shared = {a.user_id for a in db.query(Access).filter(Access.tenant_id == owner["user_id"]).all()}
+        return [{"id": u.id, "username": u.username, "is_owner": u.is_owner,
+                 "has_access_to_my_firm": u.id in shared} for u in users]
+    finally:
+        db.close()
+
+
+@app.post("/api/users")
+def create_user(c: Credentials, request: Request):
+    _require_owner(request)
+    if len(c.password) < 6:
+        raise HTTPException(400, "Passwort zu kurz (min. 6 Zeichen)")
+    uid, err = auth.create_user(c.username, c.password, is_owner=False)
+    if err:
+        raise HTTPException(400, err)
+    db = SessionLocal()
+    try:
+        ensure_seed(db, uid)   # eigene Firma für den neuen Nutzer
+    finally:
+        db.close()
+    return {"ok": True, "id": uid}
+
+
+@app.post("/api/access")
+def share_firm(s: ShareIn, request: Request):
+    """Owner teilt SEINE Firma mit einem anderen Nutzer."""
+    owner = _require_owner(request)
+    ok, msg = auth.grant_access(owner["user_id"], s.username)
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"ok": True, "note": msg}
+
+
+@app.delete("/api/access/{user_id}")
+def unshare_firm(user_id: int, request: Request):
+    owner = _require_owner(request)
+    auth.revoke_access(owner["user_id"], user_id)
+    return {"ok": True}
+
+
 @app.get("/api/secrets")
 def get_secrets():
     """Status aller Zugangsdaten (nie die Werte selbst)."""
@@ -269,10 +445,10 @@ def dashboard():
     db = SessionLocal()
     try:
         now_ = datetime.utcnow()
-        projects = db.query(Project).filter(Project.status == "active").order_by(Project.id.desc()).all()
-        agents = db.query(Agent).filter(Agent.status == "employed").all()
-        all_tasks = db.query(Task).all()
-        all_ms = db.query(Milestone).all()
+        projects = db.query(Project).filter(Project.status == "active", Project.tenant_id == context.tid()).order_by(Project.id.desc()).all()
+        agents = db.query(Agent).filter(Agent.status == "employed", Agent.tenant_id == context.tid()).all()
+        all_tasks = db.query(Task).filter(Task.tenant_id == context.tid()).all()
+        all_ms = db.query(Milestone).filter(Milestone.tenant_id == context.tid()).all()
 
         def proj_card(p):
             ptasks = [t for t in all_tasks if t.project_id == p.id]
@@ -295,14 +471,16 @@ def dashboard():
                                    "due_date": m.due_date.isoformat(), "days_over": days_over})
 
         questions = (db.query(Message)
-                     .filter(Message.recipient_kind == "user",
+                     .filter(Message.tenant_id == context.tid(),
+                             Message.recipient_kind == "user",
                              Message.requires_answer == True,  # noqa: E712
                              Message.answered == False)  # noqa: E712
                      .order_by(Message.id.desc()).limit(10).all())
         approvals = (db.query(PendingApproval)
-                     .filter(PendingApproval.status == "pending")
+                     .filter(PendingApproval.status == "pending",
+                             PendingApproval.tenant_id == context.tid())
                      .order_by(PendingApproval.id).all())
-        events = db.query(Event).order_by(Event.id.desc()).limit(8).all()
+        events = db.query(Event).filter(Event.tenant_id == context.tid()).order_by(Event.id.desc()).limit(8).all()
 
         td_all = sum(1 for t in all_tasks if t.status == "done")
         return {
@@ -333,17 +511,19 @@ def dashboard():
 def state():
     db = SessionLocal()
     try:
-        chef = db.query(Agent).filter(Agent.role == "ceo").first()
-        agents = db.query(Agent).order_by(Agent.id).all()
+        chef = db.query(Agent).filter(Agent.role == "ceo", Agent.tenant_id == context.tid()).first()
+        agents = db.query(Agent).filter(Agent.tenant_id == context.tid()).order_by(Agent.id).all()
         return {
             "chef_id": chef.id if chef else None,
             "agents": [agent_dict(db, a) for a in agents],
             "open_questions": db.query(Message).filter(
+                Message.tenant_id == context.tid(),
                 Message.recipient_kind == "user",
                 Message.requires_answer == True,  # noqa: E712
                 Message.answered == False).count(),  # noqa: E712
             "pending_approvals": db.query(PendingApproval).filter(
-                PendingApproval.status == "pending").count(),
+                PendingApproval.status == "pending",
+                PendingApproval.tenant_id == context.tid()).count(),
         }
     finally:
         db.close()
@@ -354,7 +534,7 @@ def create_request(req: NewRequest):
     """Neue Anfrage des Nutzers an den Chef."""
     db = SessionLocal()
     try:
-        chef = ensure_seed(db)
+        chef = ensure_seed(db, context.tid())
         project = Project(title=req.title, description=req.description)
         db.add(project)
         db.flush()
@@ -376,14 +556,16 @@ def post_message(m: UserMessage):
     db = SessionLocal()
     try:
         if m.to_agent_id is None:
-            chef = db.query(Agent).filter(Agent.role == "ceo").first()
+            chef = db.query(Agent).filter(Agent.role == "ceo", Agent.tenant_id == context.tid()).first()
             target_id = chef.id if chef else None
         else:
             target_id = m.to_agent_id
         if not target_id:
             raise HTTPException(404, "Kein Empfänger")
-        # Eine Nachricht des Nutzers weckt einen festsitzenden Agenten wieder
+        # Empfänger muss zur eigenen Firma gehören
         ta = db.get(Agent, target_id)
+        if not ta or ta.tenant_id != context.tid():
+            raise HTTPException(404, "Empfänger nicht gefunden")
         if ta and ta.stuck:
             ta.stuck = False
             orch.log(db, "info", f"{ta.name} durch Nutzer fortgesetzt", agent_id=ta.id)
@@ -407,7 +589,7 @@ def list_messages(agent_id: int | None = None, inbox: str | None = None):
     """inbox=user -> Nachrichten an den Nutzer. agent_id -> Thread mit einem Agenten."""
     db = SessionLocal()
     try:
-        q = db.query(Message)
+        q = db.query(Message).filter(Message.tenant_id == context.tid())
         if inbox == "user":
             q = q.filter(Message.recipient_kind == "user")
         elif agent_id is not None:
@@ -427,7 +609,7 @@ def resume_agent(agent_id: int):
     db = SessionLocal()
     try:
         a = db.get(Agent, agent_id)
-        if not a:
+        if not a or a.tenant_id != context.tid():
             raise HTTPException(404, "Agent nicht gefunden")
         a.stuck = False
         orch.log(db, "info", f"{a.name} fortgesetzt", agent_id=a.id)
@@ -442,7 +624,7 @@ def get_agent(agent_id: int):
     db = SessionLocal()
     try:
         a = db.get(Agent, agent_id)
-        if not a:
+        if not a or a.tenant_id != context.tid():
             raise HTTPException(404, "Agent nicht gefunden")
         data = agent_dict(db, a)
         data["reports"] = [agent_dict(db, r) for r in
@@ -462,7 +644,7 @@ def get_agent(agent_id: int):
 def list_tasks():
     db = SessionLocal()
     try:
-        tasks = db.query(Task).order_by(Task.id.desc()).limit(200).all()
+        tasks = db.query(Task).filter(Task.tenant_id == context.tid()).order_by(Task.id.desc()).limit(200).all()
         return [{"id": t.id, "title": t.title, "description": t.description,
                  "status": t.status, "assigned_agent_id": t.assigned_agent_id,
                  "milestone_id": t.milestone_id, "result": t.result} for t in tasks]
@@ -488,7 +670,8 @@ def list_approvals():
     db = SessionLocal()
     try:
         items = db.query(PendingApproval).filter(
-            PendingApproval.status == "pending").order_by(PendingApproval.id).all()
+            PendingApproval.status == "pending",
+            PendingApproval.tenant_id == context.tid()).order_by(PendingApproval.id).all()
         return [{"id": a.id, "summary": a.summary,
                  "action": json.loads(a.action_json)} for a in items]
     finally:
@@ -500,7 +683,7 @@ def decide_approval(approval_id: int, decision: str):
     db = SessionLocal()
     try:
         ap = db.get(PendingApproval, approval_id)
-        if not ap or ap.status != "pending":
+        if not ap or ap.tenant_id != context.tid() or ap.status != "pending":
             raise HTTPException(404, "Freigabe nicht gefunden")
         action = json.loads(ap.action_json)
         if decision == "approve":
@@ -526,7 +709,7 @@ def decide_approval(approval_id: int, decision: str):
 def list_events():
     db = SessionLocal()
     try:
-        evs = db.query(Event).order_by(Event.id.desc()).limit(100).all()
+        evs = db.query(Event).filter(Event.tenant_id == context.tid()).order_by(Event.id.desc()).limit(100).all()
         out = []
         for e in evs:
             name = ""
@@ -596,7 +779,7 @@ def list_projects():
     db = SessionLocal()
     try:
         return [{"id": p.id, "title": p.title, "status": p.status}
-                for p in db.query(Project).order_by(Project.id.desc()).all()]
+                for p in db.query(Project).filter(Project.tenant_id == context.tid()).order_by(Project.id.desc()).all()]
     finally:
         db.close()
 
@@ -629,8 +812,8 @@ def progress(project_id: int | None = None):
     """Projekt-Fortschritt: Meilensteine, Aufgaben-Statistik, Stand."""
     db = SessionLocal()
     try:
-        msq = db.query(Milestone)
-        tq = db.query(Task)
+        msq = db.query(Milestone).filter(Milestone.tenant_id == context.tid())
+        tq = db.query(Task).filter(Task.tenant_id == context.tid())
         if project_id is not None:
             msq = msq.filter(Milestone.project_id == project_id)
             tq = tq.filter(Task.project_id == project_id)
@@ -670,7 +853,7 @@ def progress(project_id: int | None = None):
 def list_milestones(project_id: int | None = None):
     db = SessionLocal()
     try:
-        q = db.query(Milestone)
+        q = db.query(Milestone).filter(Milestone.tenant_id == context.tid())
         if project_id is not None:
             q = q.filter(Milestone.project_id == project_id)
         return [_ms_dict(m) for m in q.order_by(Milestone.order_index, Milestone.id).all()]
@@ -682,7 +865,7 @@ def list_milestones(project_id: int | None = None):
 def create_milestone(m: MilestoneIn):
     db = SessionLocal()
     try:
-        n = db.query(Milestone).filter(Milestone.project_id == m.project_id).count()
+        n = db.query(Milestone).filter(Milestone.project_id == m.project_id, Milestone.tenant_id == context.tid()).count()
         ms = Milestone(project_id=m.project_id, title=m.title or "Meilenstein",
                        description=m.description or "", status=m.status or "planned",
                        order_index=n, due_date=orch.parse_due(m.due_days, m.due_date))
@@ -698,7 +881,7 @@ def update_milestone(ms_id: int, m: MilestoneIn):
     db = SessionLocal()
     try:
         ms = db.get(Milestone, ms_id)
-        if not ms:
+        if not ms or ms.tenant_id != context.tid():
             raise HTTPException(404, "Meilenstein nicht gefunden")
         if m.status:
             ms.status = m.status
@@ -723,7 +906,7 @@ def delete_milestone(ms_id: int):
     db = SessionLocal()
     try:
         ms = db.get(Milestone, ms_id)
-        if ms:
+        if ms and ms.tenant_id == context.tid():
             db.delete(ms)
             db.commit()
         return {"ok": True}
@@ -736,7 +919,7 @@ def list_decisions(project_id: int | None = None, agent_id: int | None = None, l
     """Entscheidungs-Log: warum/was/wie die KI gehandelt hat."""
     db = SessionLocal()
     try:
-        q = db.query(Decision)
+        q = db.query(Decision).filter(Decision.tenant_id == context.tid())
         if project_id is not None:
             q = q.filter(Decision.project_id == project_id)
         if agent_id is not None:
@@ -790,7 +973,7 @@ def console(project_id: int | None = None):
     """Letzte Befehlsausführungen (aus dem Event-Log)."""
     db = SessionLocal()
     try:
-        evs = (db.query(Event).filter(Event.kind.in_(["exec", "file"]))
+        evs = (db.query(Event).filter(Event.kind.in_(["exec", "file"]), Event.tenant_id == context.tid())
                .order_by(Event.id.desc()).limit(60).all())
         return [{"id": e.id, "kind": e.kind, "text": e.text,
                  "created_at": e.created_at.isoformat()} for e in evs]
@@ -838,7 +1021,7 @@ def create_project(req: NewRequest):
     """Legt ein Projekt an und beauftragt den Chef damit."""
     db = SessionLocal()
     try:
-        chef = ensure_seed(db)
+        chef = ensure_seed(db, context.tid())
         project = Project(title=req.title, description=req.description)
         db.add(project)
         db.flush()
@@ -857,7 +1040,7 @@ def create_quicktask(req: QuickTask):
     """Einzelaufgabe (kein Projekt) direkt an die Firma/den Chef."""
     db = SessionLocal()
     try:
-        chef = ensure_seed(db)
+        chef = ensure_seed(db, context.tid())
         orch.send_message(db, sender_kind="user", sender_agent_id=None,
                           recipient_kind="agent", recipient_agent_id=chef.id,
                           subject="Einzelaufgabe: " + req.title,
@@ -884,7 +1067,7 @@ def _rule_dict(r: Rule):
 def list_rules():
     db = SessionLocal()
     try:
-        return [_rule_dict(r) for r in db.query(Rule).order_by(Rule.id.desc()).all()]
+        return [_rule_dict(r) for r in db.query(Rule).filter(Rule.tenant_id == context.tid()).order_by(Rule.id.desc()).all()]
     finally:
         db.close()
 
@@ -909,7 +1092,7 @@ def update_rule(rule_id: int, r: RuleIn):
     db = SessionLocal()
     try:
         rule = db.get(Rule, rule_id)
-        if not rule:
+        if not rule or rule.tenant_id != context.tid():
             raise HTTPException(404, "Regel nicht gefunden")
         for f, v in r.model_dump(exclude_none=True).items():
             setattr(rule, f, v)
@@ -924,7 +1107,7 @@ def delete_rule(rule_id: int):
     db = SessionLocal()
     try:
         rule = db.get(Rule, rule_id)
-        if rule:
+        if rule and rule.tenant_id == context.tid():
             db.delete(rule)
             db.commit()
         return {"ok": True}
@@ -944,7 +1127,7 @@ def _skill_dict(s: Skill):
 def list_skills():
     db = SessionLocal()
     try:
-        return [_skill_dict(s) for s in db.query(Skill).order_by(Skill.id).all()]
+        return [_skill_dict(s) for s in db.query(Skill).filter(Skill.tenant_id == context.tid()).order_by(Skill.id).all()]
     finally:
         db.close()
 
@@ -953,7 +1136,7 @@ def list_skills():
 def create_skill(s: SkillIn):
     db = SessionLocal()
     try:
-        existing = db.query(Skill).filter(Skill.name == s.name).first()
+        existing = db.query(Skill).filter(Skill.name == s.name, Skill.tenant_id == context.tid()).first()
         if existing:
             for f, v in s.model_dump(exclude_none=True).items():
                 setattr(existing, f, v)
@@ -973,7 +1156,7 @@ def delete_skill(skill_id: int):
     db = SessionLocal()
     try:
         s = db.get(Skill, skill_id)
-        if s:
+        if s and s.tenant_id == context.tid():
             db.delete(s)
             db.commit()
         return {"ok": True}
@@ -997,7 +1180,7 @@ def _mcp_dict(m: McpServer):
 def list_mcp():
     db = SessionLocal()
     try:
-        return [_mcp_dict(m) for m in db.query(McpServer).order_by(McpServer.id).all()]
+        return [_mcp_dict(m) for m in db.query(McpServer).filter(McpServer.tenant_id == context.tid()).order_by(McpServer.id).all()]
     finally:
         db.close()
 
@@ -1006,7 +1189,7 @@ def list_mcp():
 def create_mcp(m: McpIn):
     db = SessionLocal()
     try:
-        existing = db.query(McpServer).filter(McpServer.name == m.name).first()
+        existing = db.query(McpServer).filter(McpServer.name == m.name, McpServer.tenant_id == context.tid()).first()
         if existing:
             for f, v in m.model_dump(exclude_none=True).items():
                 setattr(existing, f, v)
@@ -1027,7 +1210,7 @@ async def delete_mcp(mcp_id: int):
     db = SessionLocal()
     try:
         m = db.get(McpServer, mcp_id)
-        if m:
+        if m and m.tenant_id == context.tid():
             transport, command, url = m.transport, m.command, m.url
             db.delete(m)
             db.commit()

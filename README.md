@@ -46,11 +46,27 @@ Du gibst dem **Chef** einen Auftrag, er **stellt Projektleiter ein**, die wieder
 ## Schnellstart
 
 ```bash
-cp .env.example .env        # optional: API-Keys eintragen
 docker compose up --build
 ```
 
-Dann im Browser: **http://localhost:8000**
+Dann im Browser: **http://localhost:8000** – beim **ersten Start** legst du das
+**Owner-Konto** an (Benutzername + Passwort). API-Keys und E-Mail-Server trägst du
+anschließend bequem in der GUI ein (keine `.env` nötig). Eine `.env` geht aber
+weiterhin als Alternative.
+
+## Mehrbenutzer & Login
+
+AI-Hub ist **mehrbenutzerfähig**:
+
+- **Login** mit gehashtem Passwort (scrypt) und sicherem Session-Cookie
+  (bei HTTPS automatisch `Secure`).
+- **Eigene Firma pro Nutzer** – jeder Nutzer hat seine **vollständig getrennte**
+  Firma (eigene Agenten, Projekte, Aufgaben, Inbox, Einstellungen, Zugangsdaten).
+  Niemand sieht die Daten eines anderen.
+- **Owner verwaltet Nutzer** – nur der Owner (erstes Konto) legt unter *Nutzer &
+  Teilen* weitere Nutzer an. Keine offene Selbstregistrierung.
+- **Teilen** – der Owner kann seine Firma für einen Nutzer freigeben; dieser
+  wechselt dann oben rechts zwischen „Meine Firma" und der geteilten Firma.
 
 > **Läuft auch ohne API-Keys.** Ohne Schlüssel antworten die Agenten über den
 > eingebauten **Mock-Provider** (Demo-Verhalten), sodass du den kompletten Ablauf
