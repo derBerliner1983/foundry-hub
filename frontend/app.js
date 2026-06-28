@@ -12,7 +12,7 @@ let selectedAgent = null; // null = Chef-Inbox (an Nutzer)
 
 const root = document.getElementById("view-root");
 const titleEl = document.getElementById("view-title");
-const TITLES = { dashboard: "Dashboard", inbox: "Inbox", assistant: "Daily-Assistent", projects: "Projekte", progress: "Fortschritt", org: "Team / Organisation", tasks: "Aufgaben", workshop: "Werkstatt", cookbook: "Cookbook / Regelwerk", skills: "Skills & MCP", approvals: "Freigaben", activity: "Aktivität", users: "Nutzer & Teilen", settings: "Einstellungen" };
+const TITLES = { dashboard: "Dashboard", inbox: "Inbox", assistant: "Daily-Assistent", projects: "Projekte", progress: "Fortschritt", org: "Team / Organisation", tasks: "Aufgaben", workshop: "Werkstatt", cookbook: "Cookbook / Regelwerk", knowledge: "Wissensspeicher", skills: "Skills & MCP", approvals: "Freigaben", activity: "Aktivität", users: "Nutzer & Teilen", settings: "Einstellungen" };
 let wsProject = null;
 let progProject = "";
 
@@ -66,6 +66,7 @@ async function render() {
   if (currentView === "tasks") return renderTasks();
   if (currentView === "workshop") return renderWorkshop();
   if (currentView === "cookbook") return renderCookbook();
+  if (currentView === "knowledge") return renderKnowledge();
   if (currentView === "skills") return renderSkills();
   if (currentView === "users") return renderUsers();
   if (currentView === "approvals") return renderApprovals();
@@ -459,6 +460,7 @@ async function loadWorkshop() {
       <i data-lucide="file" style="width:16px"></i>
       <div class="info" style="cursor:pointer" onclick="viewFile('${encodeURIComponent(f.path)}')"><b style="font-size:13px">${esc(f.path)}</b></div>
       <span class="tag">${f.size} B</span>
+      ${/\.html?$/.test(f.path) ? `<a class="btn ghost sm" href="/api/workspace/download?project_id=${wsProject || ''}&path=${encodeURIComponent(f.path)}&inline=1" target="_blank" title="Vorschau"><i data-lucide="eye"></i></a>` : ''}
       <a class="btn ghost sm" href="/api/workspace/download?project_id=${wsProject || ''}&path=${encodeURIComponent(f.path)}" download><i data-lucide="download"></i></a>
     </div>`).join("") : `<div class="muted">Noch keine Dateien. Entwickler-Agenten legen hier Dateien an, oder lade selbst welche hoch.</div>`;
   const git = await api.get("/api/git/history?project_id=" + wsProject);
@@ -613,6 +615,52 @@ window.msDone = async (id) => { await api.put("/api/milestones/" + id, { status:
 window.msDel = async (id) => { await fetch("/api/milestones/" + id, { method: "DELETE" }); loadProgress(); };
 window.msDue = async (id, val) => { await api.put("/api/milestones/" + id, { due_date: val || null }); loadProgress(); };
 
+// ---------- Wissensspeicher ----------
+async function renderKnowledge() {
+  const docs = await api.get("/api/knowledge");
+  root.innerHTML = `
+    <div class="card" style="margin-bottom:14px"><h3><i data-lucide="brain"></i> Wissen hinzufügen</h3>
+      <input id="kn-title" placeholder="Titel (z. B. Markenrichtlinie, API-Doku)"/>
+      <textarea id="kn-content" placeholder="Inhalt/Notiz, den die Agenten durchsuchen können …"></textarea>
+      <div class="row"><button class="btn" id="kn-add"><i data-lucide="plus"></i> Speichern</button>
+        <button class="btn ghost" id="kn-up"><i data-lucide="upload"></i> Datei hochladen (txt/md/code)</button>
+        <input type="file" id="kn-file" class="hidden"/></div>
+    </div>
+    <div class="card" style="margin-bottom:14px"><h3><i data-lucide="search"></i> Wissen durchsuchen</h3>
+      <div class="row"><input id="kn-q" placeholder="Suchbegriff …" style="margin:0" onkeydown="if(event.key==='Enter')knSearch()"/>
+        <button class="btn sm" onclick="knSearch()">suchen</button></div>
+      <div id="kn-results" style="margin-top:10px"></div>
+    </div>
+    <div class="card"><h3><i data-lucide="library"></i> Dokumente (${docs.length})</h3>
+      ${docs.length ? docs.map(d => `<div class="agent-row">
+        <div class="avatar role-planner"><i data-lucide="${d.source === 'upload' ? 'file' : 'sticky-note'}"></i></div>
+        <div class="info"><b>${esc(d.title)}</b><small>${d.chars} Zeichen · ${d.source}</small></div>
+        <button class="btn red sm" onclick="delDoc(${d.id})"><i data-lucide="trash-2"></i></button></div>`).join("")
+      : `<div class="muted">Noch kein Wissen. Agenten nutzen es per <code>search_memory</code> – plus alle früheren Entscheidungen.</div>`}
+    </div>`;
+  icons();
+  document.getElementById("kn-add").onclick = async () => {
+    const t = document.getElementById("kn-title").value.trim(); if (!t) return;
+    await api.post("/api/knowledge", { title: t, content: document.getElementById("kn-content").value });
+    renderKnowledge();
+  };
+  document.getElementById("kn-up").onclick = () => document.getElementById("kn-file").click();
+  document.getElementById("kn-file").onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const fd = new FormData(); fd.append("file", f);
+    await fetch("/api/knowledge/upload", { method: "POST", body: fd });
+    renderKnowledge();
+  };
+}
+window.knSearch = async () => {
+  const q = document.getElementById("kn-q").value.trim();
+  const el = document.getElementById("kn-results");
+  if (!q) { el.innerHTML = ""; return; }
+  const r = await api.get("/api/knowledge/search?q=" + encodeURIComponent(q));
+  el.innerHTML = r.results.length ? r.results.map(h => `<div class="msg from-agent"><div class="subject">${esc(h.source)}</div><div class="body">${esc(h.snippet)}</div></div>`).join("") : `<div class="muted">Keine Treffer.</div>`;
+};
+window.delDoc = async (id) => { await fetch("/api/knowledge/" + id, { method: "DELETE" }); renderKnowledge(); };
+
 // ---------- Cookbook / Regelwerk ----------
 async function renderCookbook() {
   const rules = await api.get("/api/rules");
@@ -732,7 +780,7 @@ window.decide = async (id, d) => { await api.post(`/api/approvals/${id}/${d}`); 
 // ---------- Activity ----------
 async function renderActivity() {
   const evs = await api.get("/api/events");
-  const ic = { hire: "user-plus", fire: "user-minus", resign: "door-open", task: "list-checks", rating: "star", message: "mail", error: "alert-triangle", info: "info", milestone: "flag", deadline: "alarm-clock", mcp: "plug", file: "file", exec: "terminal", rule: "book", skill: "zap" };
+  const ic = { hire: "user-plus", fire: "user-minus", resign: "door-open", task: "list-checks", rating: "star", message: "mail", error: "alert-triangle", info: "info", milestone: "flag", deadline: "alarm-clock", mcp: "plug", file: "file", exec: "terminal", rule: "book", skill: "zap", git: "git-branch", audit: "shield", email: "send", loop: "rotate-cw" };
   root.innerHTML = `<div class="card"><h3><i data-lucide="activity"></i> Aktivitäts-Log</h3>
     ${evs.length ? evs.map(e => `<div class="agent-row"><div class="avatar" style="background:var(--panel-2);color:var(--text-dim)"><i data-lucide="${ic[e.kind] || "circle"}"></i></div>
       <div class="info"><b>${esc(e.text)}</b><small>${e.agent ? esc(e.agent) + " · " : ""}${new Date(e.created_at).toLocaleString("de-DE")}</small></div></div>`).join("") : `<div class="empty">Noch keine Aktivität.</div>`}</div>`;

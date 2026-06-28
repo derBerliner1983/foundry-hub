@@ -373,6 +373,14 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
         elif atype == "mcp_call":
             await _do_mcp_call(db, agent, act, pctx)
 
+        elif atype == "search_memory":
+            from . import knowledge
+            res = knowledge.search_text(act.get("query", ""))
+            log(db, "info", f"Wissensspeicher durchsucht: {act.get('query','')[:50]}", agent_id=agent.id)
+            send_message(db, sender_kind="system", sender_agent_id=None,
+                         recipient_kind="agent", recipient_agent_id=agent.id,
+                         subject="Wissensspeicher", body=res[:3000], project_id=pctx)
+
         # ---------- Roadmap / Meilensteine ----------
         elif atype == "add_milestone":
             n = db.query(Milestone).filter(Milestone.project_id == pctx).count()

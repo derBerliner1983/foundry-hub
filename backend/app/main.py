@@ -466,6 +466,19 @@ def _require_owner(request: Request):
     return ctx
 
 
+def _audit(request, text):
+    ctx = auth.current(request)
+    if not ctx:
+        return
+    context.set_tenant(ctx["tenant_id"])  # ensure_seed kann den Context verstellt haben
+    db = SessionLocal()
+    try:
+        orch.log(db, "audit", f"{ctx['username']}: {text}")
+        db.commit()
+    finally:
+        db.close()
+
+
 @app.get("/api/users")
 def list_users(request: Request):
     _require_owner(request)
@@ -494,6 +507,7 @@ def create_user(c: Credentials, request: Request):
         ensure_seed(db, uid)   # eigene Firma für den neuen Nutzer
     finally:
         db.close()
+    _audit(request, f"Nutzer '{c.username}' angelegt")
     return {"ok": True, "id": uid}
 
 
@@ -504,6 +518,7 @@ def share_firm(s: ShareIn, request: Request):
     ok, msg = auth.grant_access(owner["user_id"], s.username)
     if not ok:
         raise HTTPException(400, msg)
+    _audit(request, f"Firma mit '{s.username}' geteilt")
     return {"ok": True, "note": msg}
 
 
@@ -1114,14 +1129,18 @@ async def workspace_upload(project_id: int | None = Form(None), file: UploadFile
 
 
 @app.get("/api/workspace/download")
-def workspace_download(path: str, project_id: int | None = None):
-    """Lädt eine einzelne Datei herunter."""
+def workspace_download(path: str, project_id: int | None = None, inline: int = 0):
+    """Lädt eine Datei herunter (inline=1 zeigt sie im Browser, z. B. HTML-Vorschau)."""
     try:
         target = workspace.safe_abspath(project_id, path)
     except Exception:  # noqa: BLE001
         raise HTTPException(400, "Ungültiger Pfad")
     if not os.path.isfile(target):
         raise HTTPException(404, "Datei nicht gefunden")
+    if inline:
+        import mimetypes
+        mt = mimetypes.guess_type(target)[0] or "text/plain"
+        return FileResponse(target, media_type=mt)
     return FileResponse(target, filename=os.path.basename(target))
 
 
@@ -1528,6 +1547,76 @@ def delete_recurring(job_id: int):
         return {"ok": True}
     finally:
         db.close()
+
+
+class DocIn(BaseModel):
+    title: str
+    content: str = ""
+    project_id: int | None = None
+
+
+@app.get("/api/knowledge")
+def list_knowledge():
+    from .models import Document
+    db = SessionLocal()
+    try:
+        return [{"id": d.id, "title": d.title, "source": d.source,
+                 "chars": len(d.content or ""), "project_id": d.project_id}
+                for d in db.query(Document).filter(Document.tenant_id == context.tid())
+                .order_by(Document.id.desc()).all()]
+    finally:
+        db.close()
+
+
+@app.post("/api/knowledge")
+def add_knowledge(d: DocIn):
+    from .models import Document
+    db = SessionLocal()
+    try:
+        doc = Document(title=d.title, content=d.content, project_id=d.project_id, source="note")
+        db.add(doc)
+        db.commit()
+        return {"ok": True, "id": doc.id}
+    finally:
+        db.close()
+
+
+@app.post("/api/knowledge/upload")
+async def upload_knowledge(file: UploadFile = File(...)):
+    from .models import Document
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        text = ""
+    db = SessionLocal()
+    try:
+        doc = Document(title=file.filename or "Dokument", content=text[:200000], source="upload")
+        db.add(doc)
+        db.commit()
+        return {"ok": True, "id": doc.id, "chars": len(text)}
+    finally:
+        db.close()
+
+
+@app.delete("/api/knowledge/{doc_id}")
+def delete_knowledge(doc_id: int):
+    from .models import Document
+    db = SessionLocal()
+    try:
+        d = db.get(Document, doc_id)
+        if d and d.tenant_id == context.tid():
+            db.delete(d)
+            db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.get("/api/knowledge/search")
+def knowledge_search(q: str):
+    from . import knowledge
+    return {"results": knowledge.search(q)}
 
 
 @app.get("/api/budget/history")

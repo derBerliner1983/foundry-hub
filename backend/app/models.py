@@ -299,6 +299,19 @@ class Usage(Base):
     created_at = Column(DateTime, default=now)
 
 
+class Document(Base):
+    """Wissensquelle: hochgeladene/erfasste Texte, die Agenten durchsuchen können."""
+    __tablename__ = "documents"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, default=_default_tenant, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
+    title = Column(String, nullable=False)
+    content = Column(Text, default="")
+    source = Column(String, default="note")  # note | upload
+    created_at = Column(DateTime, default=now)
+
+
 class RecurringJob(Base):
     """Wiederkehrender Auftrag (z. B. wöchentlicher Report)."""
     __tablename__ = "recurring_jobs"

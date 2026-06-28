@@ -307,6 +307,16 @@ pausiert). Der Hauptschalter *Agenten laufen automatisch* pausiert alles.
 - **Backup** – vollständiger JSON-Export der Firma; Import von Regeln/Skills/
   MCP-Servern aus einem Export.
 
+### Wissensspeicher & Audit
+
+- **Wissensspeicher** – unter *Wissen* legst du Notizen ab oder lädst Dateien
+  (txt/md/Code) hoch. Agenten durchsuchen das per `search_memory` – **inkl. aller
+  früheren Entscheidungen** der Firma – um sich zu „erinnern" und Doppelarbeit zu
+  vermeiden (leichtgewichtige Stichwortsuche, keine externe Vektor-DB nötig).
+- **Live-Vorschau** – HTML-Dateien im Workspace direkt im Browser ansehen (👁).
+- **Audit-Log** – wichtige Owner-Aktionen (Nutzer anlegen, Firma teilen) werden
+  protokolliert und erscheinen in der Aktivität.
+
 ### Budget & Kosten
 
 AI-Hub erfasst den **Token-Verbrauch** jedes LLM-Aufrufs und schätzt die Kosten
