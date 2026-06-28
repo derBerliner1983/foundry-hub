@@ -4,6 +4,7 @@ import re
 
 from sqlalchemy import func, or_
 
+from . import email_util
 from . import mcp_client
 from . import providers
 from . import workspace
@@ -42,6 +43,26 @@ def get_settings(db) -> Settings:
 
 def log(db, kind, text, agent_id=None):
     db.add(Event(kind=kind, text=text, agent_id=agent_id))
+
+
+def maybe_notify(db, kind, subject, body):
+    """Schickt – falls aktiviert – eine E-Mail-Benachrichtigung an den Nutzer.
+    kind: 'question' | 'overdue'."""
+    s = db.get(Settings, 1)
+    if not s or not s.email_notifications:
+        return
+    if kind == "question" and not s.notify_questions:
+        return
+    if kind == "overdue" and not s.notify_overdue:
+        return
+    to = s.user_email or config.NOTIFY_EMAIL or config.SMTP_FROM
+    if not to or not email_util.smtp_configured():
+        return
+    try:
+        email_util.send_email(to, "[AI-Hub] " + subject, body)
+        log(db, "email", f"Benachrichtigung gesendet: {subject}")
+    except Exception as e:  # noqa: BLE001
+        log(db, "error", f"E-Mail-Fehler: {e}")
 
 
 def send_message(db, *, sender_kind, sender_agent_id, recipient_kind,
@@ -164,11 +185,14 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
                          project_id=agent.project_id)
 
         elif atype == "ask_user":
+            subj = act.get("subject", "Rückfrage")
             send_message(db, sender_kind="agent", sender_agent_id=agent.id,
                          recipient_kind="user", recipient_agent_id=None,
-                         subject="❓ " + act.get("subject", "Rückfrage"),
+                         subject="❓ " + subj,
                          body=act.get("body", ""), project_id=agent.project_id,
                          requires_answer=True)
+            maybe_notify(db, "question", f"Rückfrage von {agent.name}: {subj}",
+                         act.get("body", ""))
 
         # ---------- Einstellen ----------
         elif atype == "hire":
@@ -354,6 +378,8 @@ def check_overdue(db):
         if ms.due_date and ms.due_date < now_:
             ms.overdue_notified = True
             log(db, "deadline", f"⚠️ Meilenstein überfällig: {ms.title} (Frist {ms.due_date.date()})")
+            maybe_notify(db, "overdue", f"Meilenstein überfällig: {ms.title}",
+                         f"Der Meilenstein '{ms.title}' ist seit {ms.due_date.date()} überfällig.")
             # An die Projektleitung des Projekts melden (sonst an den Chef)
             pm = (db.query(Agent)
                   .filter(Agent.project_id == ms.project_id, Agent.role == "project_manager",
@@ -529,6 +555,7 @@ def _do_hire(db, agent, settings, act, pctx=None):
                      subject="🔐 Freigabe: Einstellung",
                      body=approval.summary + " – bitte in den Freigaben bestätigen.",
                      requires_answer=True)
+        maybe_notify(db, "question", "Freigabe nötig: Einstellung", approval.summary)
         return None
 
     return _create_agent(db, target_role, act.get("name"), provider, model,

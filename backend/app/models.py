@@ -45,6 +45,12 @@ class Settings(Base):
     active_from = Column(Integer, default=0)           # Stunde 0..23 (Fenster-Start)
     active_to = Column(Integer, default=24)            # Stunde 0..24 (Fenster-Ende)
     tick_seconds = Column(Float, default=4.0)          # Takt des Orchestrators
+    # E-Mail
+    user_email = Column(String, default="")            # Adresse für Benachrichtigungen
+    email_notifications = Column(Boolean, default=False)
+    notify_overdue = Column(Boolean, default=True)
+    notify_questions = Column(Boolean, default=True)
+    assistant_email_access = Column(Boolean, default=False)  # Daily-Assistant darf Mails lesen
 
 
 class Project(Base):

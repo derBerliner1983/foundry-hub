@@ -12,7 +12,7 @@ let selectedAgent = null; // null = Chef-Inbox (an Nutzer)
 
 const root = document.getElementById("view-root");
 const titleEl = document.getElementById("view-title");
-const TITLES = { dashboard: "Dashboard", inbox: "Inbox", projects: "Projekte", progress: "Fortschritt", org: "Team / Organisation", tasks: "Aufgaben", workshop: "Werkstatt", cookbook: "Cookbook / Regelwerk", skills: "Skills & MCP", approvals: "Freigaben", activity: "Aktivität", settings: "Einstellungen" };
+const TITLES = { dashboard: "Dashboard", inbox: "Inbox", assistant: "Daily-Assistent", projects: "Projekte", progress: "Fortschritt", org: "Team / Organisation", tasks: "Aufgaben", workshop: "Werkstatt", cookbook: "Cookbook / Regelwerk", skills: "Skills & MCP", approvals: "Freigaben", activity: "Aktivität", settings: "Einstellungen" };
 let wsProject = null;
 let progProject = "";
 
@@ -50,6 +50,7 @@ document.getElementById("theme-toggle").addEventListener("click", () => {
 async function render() {
   if (currentView === "dashboard") return renderDashboard();
   if (currentView === "inbox") return renderInbox();
+  if (currentView === "assistant") return renderAssistant();
   if (currentView === "projects") return renderProjects();
   if (currentView === "progress") return renderProgress();
   if (currentView === "org") return renderOrg();
@@ -68,6 +69,12 @@ window.goView = (view) => {
   if (el) el.click();
 };
 window.openProjectProgress = (pid) => { progProject = String(pid); goView("progress"); };
+window.answerQuestion = async (qid, senderAgentId) => {
+  const inp = document.getElementById("qans-" + qid);
+  const body = inp.value.trim(); if (!body) return;
+  await api.post("/api/messages", { to_agent_id: senderAgentId, body });
+  inp.value = ""; renderDashboard();
+};
 
 async function renderDashboard() {
   const d = await api.get("/api/dashboard");
@@ -104,9 +111,14 @@ async function renderDashboard() {
         </div>`).join("") : `<div class="muted">Noch keine Projekte. Lege in der Inbox oder unter Projekte eins an.</div>`}
       </div>
       <div class="card"><h3><i data-lucide="help-circle"></i> Offene Rückfragen an dich</h3>
-        ${d.open_questions.length ? d.open_questions.map(q => `<div class="msg needs-answer" style="cursor:pointer" onclick="goView('inbox')">
+        ${d.open_questions.length ? d.open_questions.map(q => `<div class="msg needs-answer">
           <div class="meta"><b>${esc(q.sender)}</b><span class="spacer" style="flex:1"></span>${new Date(q.created_at).toLocaleString('de-DE')}</div>
-          <div class="subject">${esc(q.subject)}</div><div class="body">${esc((q.body||'').slice(0,140))}</div></div>`).join("")
+          <div class="subject">${esc(q.subject)}</div><div class="body">${esc((q.body||'').slice(0,200))}</div>
+          <div class="row" style="margin-top:8px">
+            <input id="qans-${q.id}" placeholder="Direkt antworten …" style="margin:0"
+              onkeydown="if(event.key==='Enter')answerQuestion(${q.id}, ${q.sender_agent_id || 'null'})"/>
+            <button class="btn sm" onclick="answerQuestion(${q.id}, ${q.sender_agent_id || 'null'})"><i data-lucide="send"></i></button>
+          </div></div>`).join("")
         : `<div class="muted">Keine offenen Rückfragen.</div>`}
         ${d.approvals.length ? `<h3 style="margin-top:14px"><i data-lucide="shield-check"></i> Wartende Freigaben</h3>
           ${d.approvals.map(a => `<div class="agent-row" style="cursor:pointer" onclick="goView('approvals')">
@@ -123,6 +135,89 @@ async function renderDashboard() {
     </div>`;
   icons();
 }
+
+// ---------- Daily-Assistent ----------
+let assistChat = [];
+async function renderAssistant() {
+  const st = await api.get("/api/assistant/status");
+  root.innerHTML = `
+    <div class="card" style="margin-bottom:14px">
+      <h3><i data-lucide="sparkles"></i> Dein persönlicher Assistent</h3>
+      <div class="row" style="flex-wrap:wrap;gap:8px">
+        <span class="pill ${st.email_access ? 'employed' : 'resigned'}">E-Mail-Zugang: ${st.email_access ? 'an' : 'aus'}</span>
+        <span class="pill ${st.imap ? 'employed' : 'resigned'}">IMAP (lesen): ${st.imap ? 'konfiguriert' : 'fehlt'}</span>
+        <span class="pill ${st.smtp ? 'employed' : 'resigned'}">SMTP (senden): ${st.smtp ? 'konfiguriert' : 'fehlt'}</span>
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn ghost sm" onclick="goView('settings')"><i data-lucide="settings"></i> E-Mail einrichten</button>
+      </div>
+      ${(!st.email_access || !st.imap) ? `<div class="tag" style="margin-top:8px">Für das Lesen/Zusammenfassen: in den Einstellungen IMAP konfigurieren und „E-Mail-Zugang für Assistent" aktivieren.</div>` : ''}
+    </div>
+    <div class="grid cols-2">
+      <div class="card"><h3><i data-lucide="mail"></i> Posteingang</h3>
+        <div class="row" style="margin-bottom:10px"><button class="btn" id="as-sum"><i data-lucide="wand-2"></i> E-Mails zusammenfassen</button>
+          <button class="btn ghost" id="as-refresh"><i data-lucide="refresh-cw"></i> Laden</button></div>
+        <div id="as-summary"></div>
+        <div id="as-emails"></div>
+      </div>
+      <div class="card"><h3><i data-lucide="message-circle"></i> Mit dem Assistenten chatten</h3>
+        <div id="as-chat" style="max-height:300px;overflow:auto;margin-bottom:10px"></div>
+        <div class="row"><input id="as-msg" placeholder="Frag deinen Assistenten …" style="margin:0"
+          onkeydown="if(event.key==='Enter')asSend()"/>
+          <button class="btn" onclick="asSend()"><i data-lucide="send"></i></button></div>
+        <h3 style="margin-top:16px"><i data-lucide="mail-plus"></i> E-Mail senden</h3>
+        <input id="em-to" placeholder="An (E-Mail-Adresse)"/>
+        <input id="em-subj" placeholder="Betreff"/>
+        <textarea id="em-body" placeholder="Text …"></textarea>
+        <button class="btn" id="em-send" ${st.smtp ? '' : 'disabled'}><i data-lucide="send"></i> Senden</button>
+        <span class="muted" id="em-status" style="margin-left:8px"></span>
+      </div>
+    </div>`;
+  icons();
+  renderChat();
+  document.getElementById("as-sum").onclick = async () => {
+    const sumEl = document.getElementById("as-summary");
+    sumEl.innerHTML = `<div class="muted">fasse zusammen …</div>`;
+    const r = await api.post("/api/assistant/summarize");
+    sumEl.innerHTML = r.ok
+      ? `<div class="msg from-agent"><div class="subject">Zusammenfassung (${r.count} E-Mails)</div><div class="body">${esc(r.summary)}</div></div>`
+      : `<div class="tag" style="color:var(--red)">${esc(r.error || 'Fehler')}</div>`;
+  };
+  document.getElementById("as-refresh").onclick = loadAssistantEmails;
+  document.getElementById("em-send").onclick = async () => {
+    const r = await api.post("/api/assistant/send", {
+      to: document.getElementById("em-to").value, subject: document.getElementById("em-subj").value,
+      body: document.getElementById("em-body").value });
+    document.getElementById("em-status").textContent = r.ok ? "✓ gesendet" : ("✕ " + (r.error || ""));
+  };
+  if (st.email_access && st.imap) loadAssistantEmails();
+}
+
+async function loadAssistantEmails() {
+  const el = document.getElementById("as-emails"); if (!el) return;
+  el.innerHTML = `<div class="muted">lade …</div>`;
+  const r = await api.get("/api/assistant/emails");
+  if (!r.ok) { el.innerHTML = `<div class="tag" style="color:var(--red)">${esc(r.error || 'Fehler')}</div>`; return; }
+  el.innerHTML = r.emails.length ? r.emails.map(m => `<div class="msg">
+    <div class="meta"><b>${esc(m.from)}</b><span class="spacer" style="flex:1"></span>${esc(m.date)}</div>
+    <div class="subject">${esc(m.subject)}</div><div class="body">${esc(m.snippet)}</div></div>`).join("")
+    : `<div class="muted">Keine E-Mails.</div>`;
+}
+
+function renderChat() {
+  const el = document.getElementById("as-chat"); if (!el) return;
+  el.innerHTML = assistChat.map(m => `<div class="msg ${m.role === 'user' ? 'from-user' : 'from-agent'}">
+    <div class="meta">${m.role === 'user' ? 'Du' : 'Assistent'}</div><div class="body">${esc(m.text)}</div></div>`).join("")
+    || `<div class="muted">Stell eine Frage – z. B. „Fasse meine wichtigsten Mails zusammen" oder „Entwirf eine Antwort an …".</div>`;
+  el.scrollTop = el.scrollHeight;
+}
+window.asSend = async () => {
+  const inp = document.getElementById("as-msg"); const msg = inp.value.trim(); if (!msg) return;
+  assistChat.push({ role: "user", text: msg }); inp.value = ""; renderChat();
+  assistChat.push({ role: "assistant", text: "…" }); renderChat();
+  const r = await api.post("/api/assistant/chat", { message: msg });
+  assistChat[assistChat.length - 1] = { role: "assistant", text: r.reply || r.error || "(keine Antwort)" };
+  renderChat();
+};
 
 // ---------- Inbox ----------
 async function renderInbox() {
@@ -614,6 +709,20 @@ async function renderSettings() {
     <div class="card" style="margin-top:16px"><h3><i data-lucide="plug"></i> Provider-Status</h3>
       ${Object.entries(s.providers_available).map(([k, v]) => `<span class="pill ${v ? "employed" : "resigned"}" style="margin-right:8px">${k}: ${v ? "verfügbar" : "Mock"}</span>`).join("")}
     </div>
+    <div class="card" style="margin-top:16px"><h3><i data-lucide="mail"></i> E-Mail & Benachrichtigungen</h3>
+      <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:10px">
+        <span class="pill ${s.email_status.smtp ? 'employed' : 'resigned'}">SMTP (senden): ${s.email_status.smtp ? 'konfiguriert' : 'fehlt (.env)'}</span>
+        <span class="pill ${s.email_status.imap ? 'employed' : 'resigned'}">IMAP (lesen): ${s.email_status.imap ? 'konfiguriert' : 'fehlt (.env)'}</span>
+      </div>
+      <label>Deine E-Mail (für Benachrichtigungen)</label>
+      <input id="s-uemail" value="${esc(s.user_email || '')}" placeholder="du@beispiel.de"/>
+      <div class="row" style="margin-top:6px"><div class="toggle" id="s-notif"><div class="switch ${s.email_notifications ? 'on' : ''}"></div> E-Mail-Benachrichtigungen aktiv</div></div>
+      <div class="row" style="margin-top:8px"><div class="toggle" id="s-novd"><div class="switch ${s.notify_overdue ? 'on' : ''}"></div> bei Verzug</div></div>
+      <div class="row" style="margin-top:8px"><div class="toggle" id="s-noq"><div class="switch ${s.notify_questions ? 'on' : ''}"></div> bei neuen Rückfragen</div></div>
+      <hr style="border-color:var(--border);margin:12px 0"/>
+      <div class="row"><div class="toggle" id="s-aimail"><div class="switch ${s.assistant_email_access ? 'on' : ''}"></div> <b>Daily-Assistent darf meine E-Mails lesen</b></div></div>
+      <div class="tag" style="margin-top:8px">Zugangsdaten (SMTP/IMAP) werden sicher über <code>.env</code> gesetzt, nicht hier gespeichert.</div>
+    </div>
     <div class="card" style="margin-top:16px"><h3><i data-lucide="server"></i> Lokale Modelle (Ollama)</h3>
       <div class="row" style="margin-bottom:10px"><input id="ol-name" placeholder="Modell ziehen, z. B. llama3.1" style="margin:0"/>
         <button class="btn sm" id="ol-pull"><i data-lucide="download"></i> Ziehen</button></div>
@@ -627,7 +736,7 @@ async function renderSettings() {
     await api.post("/api/ollama/pull", { name: n }); loadOllama();
   };
   const toggles = {};
-  ["s-run", "s-hire", "s-fire", "s-code"].forEach(id => {
+  ["s-run", "s-hire", "s-fire", "s-code", "s-notif", "s-novd", "s-noq", "s-aimail"].forEach(id => {
     const el = document.getElementById(id);
     toggles[id] = el.querySelector(".switch").classList.contains("on");
     el.onclick = () => { const sw = el.querySelector(".switch"); sw.classList.toggle("on"); toggles[id] = sw.classList.contains("on"); };
@@ -652,6 +761,9 @@ async function renderSettings() {
       tick_seconds: parseFloat(document.getElementById("s-tick").value),
       active_from: parseInt(document.getElementById("s-from").value || "0"),
       active_to: parseInt(document.getElementById("s-to").value || "24"),
+      user_email: document.getElementById("s-uemail").value,
+      email_notifications: toggles["s-notif"], notify_overdue: toggles["s-novd"],
+      notify_questions: toggles["s-noq"], assistant_email_access: toggles["s-aimail"],
       default_chef_provider: document.getElementById("s-cp").value, default_chef_model: document.getElementById("s-cm").value,
       default_worker_provider: document.getElementById("s-wp").value, default_worker_model: document.getElementById("s-wm").value,
       allowed_providers: document.getElementById("s-allowed").value,

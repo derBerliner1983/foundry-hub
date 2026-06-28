@@ -50,5 +50,23 @@ class Config:
     # Optional: Brave Search API-Key für den Such-MCP-Server (sonst DuckDuckGo)
     BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
 
+    # E-Mail senden (SMTP)
+    SMTP_HOST = os.getenv("SMTP_HOST", "")
+    SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USER = os.getenv("SMTP_USER", "")
+    SMTP_PASS = os.getenv("SMTP_PASS", "")
+    SMTP_FROM = os.getenv("SMTP_FROM", "") or os.getenv("SMTP_USER", "")
+    SMTP_STARTTLS = _bool("SMTP_STARTTLS", True)
+
+    # E-Mail lesen (IMAP) – für den Daily-Assistant
+    IMAP_HOST = os.getenv("IMAP_HOST", "")
+    IMAP_PORT = int(os.getenv("IMAP_PORT", "993"))
+    IMAP_USER = os.getenv("IMAP_USER", "") or os.getenv("SMTP_USER", "")
+    IMAP_PASS = os.getenv("IMAP_PASS", "") or os.getenv("SMTP_PASS", "")
+    IMAP_SSL = _bool("IMAP_SSL", True)
+
+    # Wohin Benachrichtigungen gehen (Standard: SMTP-Absender)
+    NOTIFY_EMAIL = os.getenv("NOTIFY_EMAIL", "")
+
 
 config = Config()

@@ -8,6 +8,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from . import assistant as assistant_mod
+from . import email_util
 from . import mcp_client
 from . import ollama_admin
 from . import orchestrator as orch
@@ -199,6 +201,11 @@ class SettingsUpdate(BaseModel):
     active_from: int | None = None
     active_to: int | None = None
     tick_seconds: float | None = None
+    user_email: str | None = None
+    email_notifications: bool | None = None
+    notify_overdue: bool | None = None
+    notify_questions: bool | None = None
+    assistant_email_access: bool | None = None
 
 
 class UserRating(BaseModel):
@@ -287,6 +294,7 @@ def dashboard():
             "open_questions": [{"id": q.id, "subject": q.subject, "body": q.body,
                                 "sender": (db.get(Agent, q.sender_agent_id).name
                                            if q.sender_agent_id else "System"),
+                                "sender_agent_id": q.sender_agent_id,
                                 "created_at": q.created_at.isoformat()} for q in questions],
             "approvals": [{"id": a.id, "summary": a.summary} for a in approvals],
             "overdue_milestones": overdue_ms,
@@ -508,6 +516,13 @@ def get_settings():
             "active_from": s.active_from,
             "active_to": s.active_to,
             "tick_seconds": s.tick_seconds,
+            "user_email": s.user_email,
+            "email_notifications": s.email_notifications,
+            "notify_overdue": s.notify_overdue,
+            "notify_questions": s.notify_questions,
+            "assistant_email_access": s.assistant_email_access,
+            "email_status": {"smtp": email_util.smtp_configured(),
+                             "imap": email_util.imap_configured()},
             "providers_available": providers.available_providers(),
             "roles": {k: role_title(k) for k in ROLES},
         }
@@ -1005,6 +1020,71 @@ async def mcp_call(mcp_id: int, call: McpCall):
         return {"ok": True, "text": mcp_client.result_to_text(result)}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)}
+
+
+# --------------------------------------------------------------------------- #
+# E-Mail & Daily-Assistant
+# --------------------------------------------------------------------------- #
+class EmailOut(BaseModel):
+    to: str
+    subject: str = ""
+    body: str = ""
+
+
+class ChatIn(BaseModel):
+    message: str
+
+
+@app.post("/api/email/send")
+def email_send(m: EmailOut):
+    return email_util.send_email(m.to, m.subject, m.body)
+
+
+@app.get("/api/assistant/status")
+def assistant_status():
+    db = SessionLocal()
+    try:
+        s = orch.get_settings(db)
+        return {"email_access": s.assistant_email_access,
+                "smtp": email_util.smtp_configured(),
+                "imap": email_util.imap_configured()}
+    finally:
+        db.close()
+
+
+@app.get("/api/assistant/emails")
+def assistant_emails(limit: int = 10):
+    db = SessionLocal()
+    try:
+        s = orch.get_settings(db)
+        if not s.assistant_email_access:
+            return {"ok": False, "error": "E-Mail-Zugang für den Assistenten nicht aktiviert.", "emails": []}
+    finally:
+        db.close()
+    return email_util.fetch_recent(min(limit, 30))
+
+
+@app.post("/api/assistant/summarize")
+async def assistant_summarize(limit: int = 10):
+    db = SessionLocal()
+    try:
+        return await assistant_mod.summarize(db, min(limit, 30))
+    finally:
+        db.close()
+
+
+@app.post("/api/assistant/chat")
+async def assistant_chat(c: ChatIn):
+    db = SessionLocal()
+    try:
+        return await assistant_mod.chat(db, c.message)
+    finally:
+        db.close()
+
+
+@app.post("/api/assistant/send")
+def assistant_send(m: EmailOut):
+    return email_util.send_email(m.to, m.subject, m.body)
 
 
 # --------------------------------------------------------------------------- #

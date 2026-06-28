@@ -68,6 +68,7 @@ Dann im Browser: **http://localhost:8000**
 |--------|-------|
 | **Dashboard** | Startseite: alle Projekte mit Fortschritt, Verzüge, offene Rückfragen, Freigaben und letzte Aktivität auf einen Blick |
 | **Inbox** | Aufträge senden (**Projekt** oder **Einzelaufgabe**), mit Chef **und** jedem Agenten chatten, offene Rückfragen beantworten |
+| **Assistent** | Persönlicher Daily-Assistent (getrennt von der Firma): E-Mails lesen & zusammenfassen, chatten, E-Mails senden |
 | **Projekte** | Mehrere Projekte parallel anlegen/verwalten – jedes mit eigenem Team, Aufgaben & Workspace |
 | **Fortschritt** | Fortschrittsbalken, Roadmap/Meilensteine und das Entscheidungs-Log (warum/was/wie) je Projekt |
 | **Team / Org** | Organigramm mit Bewertungs-Donut, Status & Detailansicht; eigene Bewertung pro Agent |
@@ -89,6 +90,23 @@ Mitarbeiter, erledigte Aufgaben, offene Rückfragen, wartende Freigaben,
 Verzugs-Markierung, die Liste **offener Rückfragen an dich**, wartende
 **Freigaben** und die **letzte Aktivität**. Alles ist anklickbar und springt in
 die passende Ansicht.
+
+### Daily-Assistent & E-Mail
+
+Getrennt von der Projekt-Firma gibt es einen **persönlichen Daily-Assistenten**
+für die tägliche Arbeit:
+
+- **E-Mails lesen & zusammenfassen** – mit deiner Erlaubnis (Schalter „Daily-
+  Assistent darf meine E-Mails lesen") liest er per **IMAP** deinen Posteingang
+  und fasst ihn auf Knopfdruck zusammen (Absender, Kernaussage, empfohlene Aktion).
+- **Chatten** – frag ihn etwas; bei aktivem Zugang nimmt er die aktuellen E-Mails
+  als Kontext (z. B. „Entwirf eine Antwort an …").
+- **E-Mail senden** – per **SMTP** direkt aus der App.
+
+**E-Mail-Benachrichtigungen:** Optional schickt dir AI-Hub eine E-Mail bei
+**Verzug** (überfälliger Meilenstein) und bei **neuen Rückfragen/Freigaben** –
+einstellbar unter *Einstellungen → E-Mail & Benachrichtigungen*. Zugangsdaten
+(SMTP/IMAP) kommen sicher aus der `.env`, nicht aus der Datenbank.
 
 ### Mehrere Projekte & Einzelaufgaben
 
@@ -263,6 +281,9 @@ So entsteht die Zusammenarbeit. Ergebnisse von Fachkräften sind Text-Artefakte
 | `OPENAI_API_KEY` | – | OpenAI-Cloud aktivieren |
 | `BRAVE_API_KEY` | – | Web-Suche über Brave statt DuckDuckGo |
 | `MCP_FS_ROOT` | = `WORKSPACE_DIR` | Wurzel für die MCP-Server `filesystem`/`git` |
+| `SMTP_HOST`/`_PORT`/`_USER`/`_PASS`/`_FROM` | – | E-Mail senden (Benachrichtigungen & Assistent) |
+| `IMAP_HOST`/`_PORT`/`_USER`/`_PASS` | – | E-Mail lesen (Daily-Assistent) |
+| `NOTIFY_EMAIL` | – | Ziel für Benachrichtigungen (sonst in der App setzbar) |
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | Lokaler Ollama-Server |
 | `OLLAMA_AUTO_MODEL` | `llama3.2:1b` | Beim Start ziehen – nur falls kein Modell vorhanden (leer = nie) |
 | `DEFAULT_CHEF_PROVIDER` / `_MODEL` | `claude` / `claude-opus-4-8` | Standardmodell des Chefs |
