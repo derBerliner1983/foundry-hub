@@ -134,11 +134,28 @@ bearbeiten, aktiv/inaktiv schalten oder löschen.
   |--------|-------|-------|
   | `filesystem` | `list_dir`, `read_file`, `write_file` | Dateien im Workspace – auf die Wurzel begrenzt (kein Ausbruch) |
   | `web` | `fetch_url`, `http_head` | Webseiten per HTTP abrufen |
+  | `git` | `git_status`, `git_log`, `git_diff`, `git_branch`, `git_show` | Git-Infos eines Repos (lesend) |
+  | `search` | `web_search` | Websuche – schlüssellos über DuckDuckGo, mit `BRAVE_API_KEY` über Brave |
   | `demo` | `echo`, `add` | Zum Ausprobieren |
 
   Eigene Server fügst du unter *Skills & MCP* hinzu (stdio-Befehl oder http-URL)
-  und klickst **Verbinden**. Die Wurzel des Dateisystem-Servers steuerst du über
-  `MCP_FS_ROOT` (Standard: `WORKSPACE_DIR`).
+  und klickst **Verbinden**. Die Wurzel von `filesystem`/`git` steuerst du über
+  `MCP_FS_ROOT` (Standard: `WORKSPACE_DIR`). `git` benötigt das `git`-Binary
+  (im Docker-Image enthalten).
+
+### Zeitplan – wann die KI prüft & beobachtet
+
+Unter *Einstellungen → Zeitplan* legst du fest, **wann** die Agenten aktiv werden:
+
+- **Dauerbetrieb** – die KI arbeitet laufend (Standard).
+- **Zeitfenster** – nur zwischen *aktiv ab* und *aktiv bis* (Stunde, auch über
+  Mitternacht). Außerhalb ruht die KI.
+- **Nur manuell** – die KI wird ausschließlich auf Knopfdruck aktiv.
+- **Takt** – Sekunden zwischen den Prüfungen (wie oft nach Arbeit gesucht wird).
+- **Jetzt prüfen** – stößt sofort einen Arbeitsdurchlauf an, unabhängig vom Modus.
+
+Der Status oben rechts zeigt den aktuellen Modus (läuft / Zeitfenster / manuell /
+pausiert). Der Hauptschalter *Agenten laufen automatisch* pausiert alles.
 
 ### Bewertung, Kündigung & Modelle
 
@@ -168,7 +185,8 @@ backend/app/
   ollama_admin.py  Ollama: Modelle auflisten/ziehen/laden/entladen/löschen
   mcp_client.py    Echter MCP-Client (JSON-RPC über stdio/http)
   mcp_serverlib.py Mini-Bibliothek für eigene MCP-Server (stdio)
-  mcp_fs_server.py · mcp_web_server.py · mcp_demo_server.py  vorkonfigurierte MCP-Server
+  mcp_fs_server.py · mcp_web_server.py · mcp_git_server.py ·
+  mcp_search_server.py · mcp_demo_server.py   vorkonfigurierte MCP-Server
   providers/       claude.py · openai_provider.py · ollama.py · base.py (Mock)
   prompts.py       System-Prompts + Aktions-Spezifikation
   roles.py         Rollenkatalog (wer wen einstellen darf)
@@ -207,6 +225,8 @@ So entsteht die Zusammenarbeit. Ergebnisse von Fachkräften sind Text-Artefakte
 |----------|----------|-----------|
 | `ANTHROPIC_API_KEY` | – | Claude-Cloud aktivieren |
 | `OPENAI_API_KEY` | – | OpenAI-Cloud aktivieren |
+| `BRAVE_API_KEY` | – | Web-Suche über Brave statt DuckDuckGo |
+| `MCP_FS_ROOT` | = `WORKSPACE_DIR` | Wurzel für die MCP-Server `filesystem`/`git` |
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | Lokaler Ollama-Server |
 | `OLLAMA_AUTO_MODEL` | `llama3.2:1b` | Beim Start ziehen – nur falls kein Modell vorhanden (leer = nie) |
 | `DEFAULT_CHEF_PROVIDER` / `_MODEL` | `claude` / `claude-opus-4-8` | Standardmodell des Chefs |

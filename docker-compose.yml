@@ -10,6 +10,7 @@ services:
       - DATABASE_URL=sqlite:////data/aihub.db
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - BRAVE_API_KEY=${BRAVE_API_KEY:-}
       - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_AUTO_MODEL=${OLLAMA_AUTO_MODEL:-llama3.2:1b}
       - DEFAULT_CHEF_PROVIDER=${DEFAULT_CHEF_PROVIDER:-claude}

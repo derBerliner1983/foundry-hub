@@ -414,7 +414,22 @@ async function renderSettings() {
   const s = await api.get("/api/settings");
   const provOpts = (sel) => ["claude", "openai", "ollama"].map(p => `<option ${sel === p ? "selected" : ""} value="${p}">${p}${s.providers_available[p] ? "" : " (kein Key → Mock)"}</option>`).join("");
   const autoOpts = { full: "Voll autonom (keine Rückfragen)", ask_for_hiring: "Nachfragen bei Einstellung/Kündigung", ask_for_everything: "Bei allem Wichtigen nachfragen" };
+  const schedOpts = { always: "Dauerbetrieb (immer)", window: "Nur in einem Zeitfenster", manual: "Nur manuell (auf Knopfdruck)" };
   root.innerHTML = `
+    <div class="card" style="margin-bottom:14px"><h3><i data-lucide="clock"></i> Zeitplan – wann die KI prüft & beobachtet</h3>
+      <div class="grid cols-2" style="gap:10px">
+        <div><label>Modus</label>
+          <select id="s-sched">${Object.keys(schedOpts).map(k => `<option value="${k}" ${s.schedule_mode === k ? "selected" : ""}>${schedOpts[k]}</option>`).join("")}</select></div>
+        <div><label>Takt (Sekunden zwischen den Prüfungen)</label>
+          <input id="s-tick" type="number" min="1" step="1" value="${s.tick_seconds}"/></div>
+      </div>
+      <div id="s-window" class="row" style="${s.schedule_mode === 'window' ? '' : 'display:none'}">
+        <div style="flex:1"><label>Aktiv ab (Stunde)</label><input id="s-from" type="number" min="0" max="23" value="${s.active_from}"/></div>
+        <div style="flex:1"><label>Aktiv bis (Stunde)</label><input id="s-to" type="number" min="0" max="24" value="${s.active_to}"/></div>
+      </div>
+      <div class="row"><button class="btn" id="s-runnow"><i data-lucide="play"></i> Jetzt prüfen</button>
+        <span class="muted" id="run-info"></span></div>
+    </div>
     <div class="grid cols-2">
       <div class="card"><h3><i data-lucide="sliders"></i> Autonomie & Freigaben</h3>
         <label>Autonomie-Stufe</label>
@@ -457,12 +472,26 @@ async function renderSettings() {
     toggles[id] = el.querySelector(".switch").classList.contains("on");
     el.onclick = () => { const sw = el.querySelector(".switch"); sw.classList.toggle("on"); toggles[id] = sw.classList.contains("on"); };
   });
+  // Zeitplan: Fenster ein-/ausblenden + Jetzt prüfen
+  document.getElementById("s-sched").onchange = e => {
+    document.getElementById("s-window").style.display = e.target.value === "window" ? "" : "none";
+  };
+  document.getElementById("s-runnow").onclick = async () => {
+    const info = document.getElementById("run-info");
+    info.textContent = "läuft …";
+    const r = await api.post("/api/run-now");
+    info.textContent = `✓ ${r.ran} Schritt(e) ausgeführt`;
+  };
   document.getElementById("s-save").onclick = async () => {
     await api.put("/api/settings", {
       autonomy_level: document.getElementById("s-autonomy").value,
       auto_run: toggles["s-run"], require_approval_hire: toggles["s-hire"], require_approval_fire: toggles["s-fire"],
       fire_threshold: parseFloat(document.getElementById("s-thresh").value),
       enable_code_exec: toggles["s-code"],
+      schedule_mode: document.getElementById("s-sched").value,
+      tick_seconds: parseFloat(document.getElementById("s-tick").value),
+      active_from: parseInt(document.getElementById("s-from").value || "0"),
+      active_to: parseInt(document.getElementById("s-to").value || "24"),
       default_chef_provider: document.getElementById("s-cp").value, default_chef_model: document.getElementById("s-cm").value,
       default_worker_provider: document.getElementById("s-wp").value, default_worker_model: document.getElementById("s-wm").value,
       allowed_providers: document.getElementById("s-allowed").value,
@@ -506,8 +535,14 @@ async function refreshBadges() {
     bi.textContent = s.open_questions; bi.classList.toggle("hidden", !s.open_questions);
     ba.textContent = s.pending_approvals; ba.classList.toggle("hidden", !s.pending_approvals);
     const run = await api.get("/api/settings");
-    document.getElementById("run-dot").style.background = run.auto_run ? "var(--green)" : "var(--text-dim)";
-    document.getElementById("run-label").textContent = run.auto_run ? "läuft" : "pausiert";
+    let label = "pausiert", active = false;
+    if (run.auto_run) {
+      if (run.schedule_mode === "manual") { label = "manuell"; }
+      else if (run.schedule_mode === "window") { label = `Zeitfenster ${run.active_from}–${run.active_to} Uhr`; active = true; }
+      else { label = "läuft"; active = true; }
+    }
+    document.getElementById("run-dot").style.background = active ? "var(--green)" : "var(--text-dim)";
+    document.getElementById("run-label").textContent = label;
   } catch (e) { /* still */ }
 }
 

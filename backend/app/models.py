@@ -40,6 +40,11 @@ class Settings(Base):
     fire_threshold = Column(Float, default=2.0)
     # Dürfen Agenten echte Dateien schreiben und Befehle ausführen?
     enable_code_exec = Column(Boolean, default=True)
+    # Zeitplan: wann die KI prüft & beobachtet
+    schedule_mode = Column(String, default="always")  # always | window | manual
+    active_from = Column(Integer, default=0)           # Stunde 0..23 (Fenster-Start)
+    active_to = Column(Integer, default=24)            # Stunde 0..24 (Fenster-Ende)
+    tick_seconds = Column(Float, default=4.0)          # Takt des Orchestrators
 
 
 class Project(Base):

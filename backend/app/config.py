@@ -47,5 +47,8 @@ class Config:
     # gar kein Modell installiert ist. Leer = nie automatisch ziehen.
     OLLAMA_AUTO_MODEL = os.getenv("OLLAMA_AUTO_MODEL", "llama3.2:1b")
 
+    # Optional: Brave Search API-Key für den Such-MCP-Server (sonst DuckDuckGo)
+    BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
+
 
 config = Config()

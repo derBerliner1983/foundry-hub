@@ -547,10 +547,26 @@ async def run_agent_turn(db, agent: Agent):
             "thoughts": parsed.get("thoughts", ""), "actions": parsed.get("actions", [])}
 
 
-async def tick(db):
-    """Eine Arbeitseinheit. Gibt zurück, was passiert ist (oder None)."""
+def within_schedule(settings) -> bool:
+    """Prüft, ob die KI laut Zeitplan gerade arbeiten darf."""
+    import datetime
+    mode = settings.schedule_mode or "always"
+    if mode == "manual":
+        return False
+    if mode == "window":
+        h = datetime.datetime.now().hour
+        f, t = settings.active_from or 0, settings.active_to if settings.active_to is not None else 24
+        if f <= t:
+            return f <= h < t
+        return h >= f or h < t  # über Mitternacht
+    return True  # always
+
+
+async def tick(db, force=False):
+    """Eine Arbeitseinheit. Gibt zurück, was passiert ist (oder None).
+    force=True ignoriert den Zeitplan (für 'Jetzt prüfen')."""
     settings = get_settings(db)
-    if not settings.auto_run:
+    if not force and (not settings.auto_run or not within_schedule(settings)):
         return None
     agent = _next_agent_to_act(db)
     if not agent:

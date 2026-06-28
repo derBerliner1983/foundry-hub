@@ -87,17 +87,20 @@ async def _startup_ollama():
 
 
 async def orchestrator_loop():
-    """Lässt die Agenten kontinuierlich arbeiten, solange offene Arbeit existiert."""
+    """Lässt die Agenten arbeiten – Takt und Zeitplan kommen aus den Einstellungen."""
     while True:
+        sleep_for = config.TICK_INTERVAL_SECONDS
         try:
             db = SessionLocal()
             try:
                 await orch.tick(db)
+                s = orch.get_settings(db)
+                sleep_for = max(1.0, s.tick_seconds or config.TICK_INTERVAL_SECONDS)
             finally:
                 db.close()
         except Exception as e:  # noqa: BLE001
             print("Orchestrator-Fehler:", e)
-        await asyncio.sleep(config.TICK_INTERVAL_SECONDS)
+        await asyncio.sleep(sleep_for)
 
 
 # --------------------------------------------------------------------------- #
@@ -190,6 +193,10 @@ class SettingsUpdate(BaseModel):
     require_approval_fire: bool | None = None
     fire_threshold: float | None = None
     enable_code_exec: bool | None = None
+    schedule_mode: str | None = None
+    active_from: int | None = None
+    active_to: int | None = None
+    tick_seconds: float | None = None
 
 
 class UserRating(BaseModel):
@@ -204,6 +211,22 @@ class UserRating(BaseModel):
 @app.get("/api/health")
 def health():
     return {"status": "ok", "providers": providers.available_providers()}
+
+
+@app.post("/api/run-now")
+async def run_now(steps: int = 6):
+    """Lässt die KI sofort prüfen/arbeiten – ignoriert den Zeitplan (manueller Anstoß)."""
+    done = 0
+    for _ in range(max(1, min(steps, 20))):
+        db = SessionLocal()
+        try:
+            result = await orch.tick(db, force=True)
+        finally:
+            db.close()
+        if result is None:
+            break
+        done += 1
+    return {"ran": done}
 
 
 @app.get("/api/state")
@@ -413,6 +436,10 @@ def get_settings():
             "require_approval_fire": s.require_approval_fire,
             "fire_threshold": s.fire_threshold,
             "enable_code_exec": s.enable_code_exec,
+            "schedule_mode": s.schedule_mode,
+            "active_from": s.active_from,
+            "active_to": s.active_to,
+            "tick_seconds": s.tick_seconds,
             "providers_available": providers.available_providers(),
             "roles": {k: role_title(k) for k in ROLES},
         }
