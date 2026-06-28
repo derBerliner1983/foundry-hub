@@ -154,6 +154,11 @@ wurde was gemacht":
   (geplant → läuft → erledigt) und Zeitpunkt. Der Projektleiter legt sie zu
   Projektbeginn automatisch an (`add_milestone`); du kannst eigene ergänzen,
   abhaken oder löschen.
+- **Aufgaben ↔ Meilensteine** – Aufgaben werden Meilensteinen zugeordnet
+  (`create_task` mit `milestone`). Jeder Meilenstein zeigt einen eigenen
+  **Fortschrittsbalken** (erledigte / gesamte Aufgaben). Der Meilenstein-Status
+  folgt **automatisch**: sobald Aufgaben anfallen → „läuft", sobald alle erledigt
+  sind → „erledigt". Aufgaben ohne Meilenstein werden separat ausgewiesen.
 - **Entscheidungs-Log** – für **jede** KI-Runde wird gespeichert: das **Warum**
   (Begründung des Agenten), das **Was/Wie** (durchgeführte Aktionen) und der
   **Auslöser**. So ist jederzeit nachvollziehbar, *warum* ein Agent etwas getan

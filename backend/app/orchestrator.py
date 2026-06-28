@@ -208,11 +208,17 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
                           .filter(Agent.manager_id == agent.id, Agent.status == "employed")
                           .order_by(Agent.id.desc()).first())
                 assign = newest.id if newest else None
+            ms = _find_milestone(db, pctx, {"milestone_id": act.get("milestone_id"),
+                                            "title": act.get("milestone", "")})
             t = Task(project_id=pctx, title=act.get("title", "Aufgabe"),
                      description=act.get("description", ""), assigned_agent_id=assign,
-                     created_by_agent_id=agent.id, status="todo")
+                     created_by_agent_id=agent.id, status="todo",
+                     milestone_id=ms.id if ms else None)
             db.add(t)
-            log(db, "task", f"Neue Aufgabe '{t.title}' an #{assign}", agent_id=agent.id)
+            if ms and ms.status == "planned":
+                ms.status = "in_progress"
+            log(db, "task", f"Neue Aufgabe '{t.title}' an #{assign}"
+                + (f" [Meilenstein: {ms.title}]" if ms else ""), agent_id=agent.id)
             if assign:
                 send_message(db, sender_kind="agent", sender_agent_id=agent.id,
                              recipient_kind="agent", recipient_agent_id=assign,
@@ -226,6 +232,7 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
                 task.status = "done"
                 task.result = act.get("result", "")
                 log(db, "task", f"Aufgabe '{task.title}' erledigt", agent_id=agent.id)
+                _refresh_milestone_status(db, task.milestone_id, agent.id)
                 if task.created_by_agent_id and task.created_by_agent_id != agent.id:
                     send_message(db, sender_kind="agent", sender_agent_id=agent.id,
                                  recipient_kind="agent", recipient_agent_id=task.created_by_agent_id,
@@ -311,6 +318,33 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
 def now():
     from datetime import datetime
     return datetime.utcnow()
+
+
+def _refresh_milestone_status(db, milestone_id, agent_id=None):
+    """Leitet den Meilenstein-Status aus seinen Aufgaben ab:
+    alle erledigt -> done; mindestens eine vorhanden -> in_progress."""
+    if not milestone_id:
+        return
+    ms = db.get(Milestone, milestone_id)
+    if not ms:
+        return
+    tasks = db.query(Task).filter(Task.milestone_id == milestone_id).all()
+    if not tasks:
+        return
+    done = sum(1 for t in tasks if t.status == "done")
+    if done == len(tasks):
+        if ms.status != "done":
+            ms.status = "done"
+            ms.completed_at = now()
+            log(db, "milestone", f"Meilenstein automatisch erreicht: {ms.title}", agent_id=agent_id)
+    elif ms.status == "planned":
+        ms.status = "in_progress"
+
+
+def milestone_progress(db, milestone_id):
+    """(done, total) der Aufgaben eines Meilensteins."""
+    tasks = db.query(Task).filter(Task.milestone_id == milestone_id).all()
+    return sum(1 for t in tasks if t.status == "done"), len(tasks)
 
 
 def _find_milestone(db, pctx, act):

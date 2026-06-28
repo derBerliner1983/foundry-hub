@@ -85,6 +85,7 @@ class Task(Base):
     assigned_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
     created_by_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
     parent_task_id = Column(Integer, ForeignKey("tasks.id"), nullable=True)
+    milestone_id = Column(Integer, ForeignKey("milestones.id"), nullable=True)
     status = Column(String, default="todo")  # todo | in_progress | done | failed
     result = Column(Text, default="")
     exec_count = Column(Integer, default=0)  # Anzahl ausgeführter Befehle (Limit)

@@ -329,14 +329,21 @@ async function loadProgress() {
         ${bar(prog.milestone_percent, "var(--accent)")}</div>
     </div>
     <div class="card" style="margin-bottom:14px"><h3><i data-lucide="flag"></i> Roadmap / Zwischenschritte</h3>
-      ${milestones.length ? milestones.map(m => `<div class="agent-row">
-        <div class="avatar role-${m.status === 'done' ? 'developer' : (m.status === 'in_progress' ? 'project_manager' : 'planner')}">
-          <i data-lucide="${m.status === 'done' ? 'check' : (m.status === 'in_progress' ? 'loader' : 'circle')}"></i></div>
-        <div class="info"><b>${esc(m.title)}</b><small>${esc(m.description || '')}${m.completed_at ? ' · erledigt ' + new Date(m.completed_at).toLocaleString('de-DE') : ''}</small></div>
-        <span class="pill ${stCls[m.status]}">${stTxt[m.status]}</span>
-        ${m.status !== 'done' ? `<button class="btn ghost sm" onclick="msDone(${m.id})"><i data-lucide="check"></i></button>` : ''}
-        <button class="btn red sm" onclick="msDel(${m.id})"><i data-lucide="trash-2"></i></button>
+      ${(prog.milestones && prog.milestones.length) ? prog.milestones.map(m => `<div style="border:1px solid var(--border);border-radius:10px;padding:11px 13px;margin-bottom:9px;background:var(--bg-2)">
+        <div class="row">
+          <div class="avatar role-${m.status === 'done' ? 'developer' : (m.status === 'in_progress' ? 'project_manager' : 'planner')}" style="width:32px;height:32px">
+            <i data-lucide="${m.status === 'done' ? 'check' : (m.status === 'in_progress' ? 'loader' : 'circle')}"></i></div>
+          <div style="flex:1"><b>${esc(m.title)}</b>${m.description ? `<br><small class="muted">${esc(m.description)}</small>` : ''}</div>
+          <span class="pill ${stCls[m.status]}">${stTxt[m.status]}</span>
+          ${m.status !== 'done' ? `<button class="btn ghost sm" onclick="msDone(${m.id})"><i data-lucide="check"></i></button>` : ''}
+          <button class="btn red sm" onclick="msDel(${m.id})"><i data-lucide="trash-2"></i></button>
+        </div>
+        <div class="row" style="margin-top:8px;gap:8px">
+          <div style="flex:1">${bar(m.percent, m.status === 'done' ? 'var(--green)' : 'var(--accent)')}</div>
+          <small class="muted" style="white-space:nowrap">${m.tasks_done}/${m.tasks_total} Aufgaben${m.completed_at ? ' · ' + new Date(m.completed_at).toLocaleDateString('de-DE') : ''}</small>
+        </div>
       </div>`).join("") : `<div class="muted">Noch keine Meilensteine. Der Projektleiter plant sie automatisch – oder lege selbst welche an:</div>`}
+      ${prog.unassigned_tasks ? `<div class="tag" style="margin-top:4px">${prog.unassigned_done}/${prog.unassigned_tasks} Aufgaben ohne Meilenstein</div>` : ''}
       <div class="row" style="margin-top:10px"><input id="ms-title" placeholder="Eigener Meilenstein" style="margin:0"/>
         <button class="btn sm" id="ms-add" style="white-space:nowrap"><i data-lucide="plus"></i> Hinzufügen</button></div>
     </div>

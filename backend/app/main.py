@@ -346,7 +346,7 @@ def list_tasks():
         tasks = db.query(Task).order_by(Task.id.desc()).limit(200).all()
         return [{"id": t.id, "title": t.title, "description": t.description,
                  "status": t.status, "assigned_agent_id": t.assigned_agent_id,
-                 "result": t.result} for t in tasks]
+                 "milestone_id": t.milestone_id, "result": t.result} for t in tasks]
     finally:
         db.close()
 
@@ -505,9 +505,22 @@ def progress(project_id: int | None = None):
         t_done = sum(1 for t in tasks if t.status == "done")
         m_total = len(milestones)
         m_done = sum(1 for m in milestones if m.status == "done")
+        # Aufgaben-Fortschritt je Meilenstein
+        ms_list = []
+        for m in milestones:
+            mtasks = [t for t in tasks if t.milestone_id == m.id]
+            md = sum(1 for t in mtasks if t.status == "done")
+            d = _ms_dict(m)
+            d["tasks_total"] = len(mtasks)
+            d["tasks_done"] = md
+            d["percent"] = round(100 * md / len(mtasks)) if mtasks else (100 if m.status == "done" else 0)
+            ms_list.append(d)
+        unassigned = [t for t in tasks if t.milestone_id is None]
         return {
             "project_id": project_id,
-            "milestones": [_ms_dict(m) for m in milestones],
+            "milestones": ms_list,
+            "unassigned_tasks": len(unassigned),
+            "unassigned_done": sum(1 for t in unassigned if t.status == "done"),
             "tasks_total": t_total, "tasks_done": t_done,
             "tasks_in_progress": sum(1 for t in tasks if t.status == "in_progress"),
             "milestones_total": m_total, "milestones_done": m_done,
