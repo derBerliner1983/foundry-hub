@@ -37,5 +37,15 @@ class Config:
     # damit das System auch ohne Cloud-Zugang vorgeführt werden kann.
     ALLOW_MOCK_FALLBACK = _bool("ALLOW_MOCK_FALLBACK", True)
 
+    # Code-Werkstatt
+    WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "/data/workspace")
+    ENABLE_CODE_EXECUTION = _bool("ENABLE_CODE_EXECUTION", True)
+    EXEC_TIMEOUT = int(os.getenv("EXEC_TIMEOUT", "60"))
+    MAX_EXEC_PER_TASK = int(os.getenv("MAX_EXEC_PER_TASK", "10"))
+
+    # Ollama: Standardmodell, das beim Start NUR gezogen wird, wenn noch
+    # gar kein Modell installiert ist. Leer = nie automatisch ziehen.
+    OLLAMA_AUTO_MODEL = os.getenv("OLLAMA_AUTO_MODEL", "llama3.2:1b")
+
 
 config = Config()

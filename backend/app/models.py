@@ -38,6 +38,8 @@ class Settings(Base):
     require_approval_fire = Column(Boolean, default=True)
     # Bewertungsschwelle: durchschnittliche Bewertung, ab der gekündigt werden darf
     fire_threshold = Column(Float, default=2.0)
+    # Dürfen Agenten echte Dateien schreiben und Befehle ausführen?
+    enable_code_exec = Column(Boolean, default=True)
 
 
 class Project(Base):
@@ -80,6 +82,7 @@ class Task(Base):
     parent_task_id = Column(Integer, ForeignKey("tasks.id"), nullable=True)
     status = Column(String, default="todo")  # todo | in_progress | done | failed
     result = Column(Text, default="")
+    exec_count = Column(Integer, default=0)  # Anzahl ausgeführter Befehle (Limit)
     created_at = Column(DateTime, default=now)
     updated_at = Column(DateTime, default=now, onupdate=now)
 

@@ -11,11 +11,15 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_AUTO_MODEL=${OLLAMA_AUTO_MODEL:-llama3.2:1b}
       - DEFAULT_CHEF_PROVIDER=${DEFAULT_CHEF_PROVIDER:-claude}
       - DEFAULT_CHEF_MODEL=${DEFAULT_CHEF_MODEL:-claude-opus-4-8}
       - DEFAULT_WORKER_PROVIDER=${DEFAULT_WORKER_PROVIDER:-claude}
       - DEFAULT_WORKER_MODEL=${DEFAULT_WORKER_MODEL:-claude-sonnet-4-6}
       - ALLOW_MOCK_FALLBACK=${ALLOW_MOCK_FALLBACK:-true}
+      - ENABLE_CODE_EXECUTION=${ENABLE_CODE_EXECUTION:-true}
+      - EXEC_TIMEOUT=${EXEC_TIMEOUT:-60}
+      - WORKSPACE_DIR=/data/workspace
     volumes:
       - aihub-data:/data
     depends_on:

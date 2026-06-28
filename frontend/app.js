@@ -12,7 +12,8 @@ let selectedAgent = null; // null = Chef-Inbox (an Nutzer)
 
 const root = document.getElementById("view-root");
 const titleEl = document.getElementById("view-title");
-const TITLES = { inbox: "Inbox", org: "Team / Organisation", tasks: "Aufgaben", approvals: "Freigaben", activity: "Aktivität", settings: "Einstellungen" };
+const TITLES = { inbox: "Inbox", org: "Team / Organisation", tasks: "Aufgaben", workshop: "Werkstatt", approvals: "Freigaben", activity: "Aktivität", settings: "Einstellungen" };
+let wsProject = null;
 
 function icons() { window.lucide && lucide.createIcons(); }
 function esc(s) { return (s || "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
@@ -49,6 +50,7 @@ async function render() {
   if (currentView === "inbox") return renderInbox();
   if (currentView === "org") return renderOrg();
   if (currentView === "tasks") return renderTasks();
+  if (currentView === "workshop") return renderWorkshop();
   if (currentView === "approvals") return renderApprovals();
   if (currentView === "activity") return renderActivity();
   if (currentView === "settings") return renderSettings();
@@ -197,6 +199,53 @@ async function renderTasks() {
   icons(); setupCollapse();
 }
 
+// ---------- Werkstatt ----------
+async function renderWorkshop() {
+  const projects = await api.get("/api/projects");
+  if (wsProject === null && projects.length) wsProject = projects[0].id;
+  const opts = projects.map(p => `<option value="${p.id}" ${wsProject == p.id ? "selected" : ""}>#${p.id} ${esc(p.title)}</option>`).join("");
+  root.innerHTML = `
+    <div class="card" style="margin-bottom:14px">
+      <div class="row"><h3 style="margin:0"><i data-lucide="folder-code"></i> Projekt-Workspace</h3>
+        <div class="spacer" style="flex:1"></div>
+        <select id="ws-proj" style="width:auto;margin:0">${opts || '<option>kein Projekt</option>'}</select></div>
+    </div>
+    <div class="grid cols-2">
+      <div class="card"><h3><i data-lucide="files"></i> Dateien</h3><div id="ws-files"></div></div>
+      <div class="card"><h3><i data-lucide="file-text"></i> Vorschau</h3><pre id="ws-view" style="white-space:pre-wrap;max-height:340px;overflow:auto;margin:0;color:var(--text-dim)">Datei wählen …</pre></div>
+    </div>
+    <div class="panel" style="margin-top:14px">
+      <div class="panel-head"><i data-lucide="terminal"></i> <b>Konsole / Ausführungen</b><i data-lucide="chevron-down" class="chev"></i></div>
+      <div class="panel-body" id="ws-console"></div>
+    </div>`;
+  icons(); setupCollapse();
+  document.getElementById("ws-proj").onchange = e => { wsProject = e.target.value; loadWorkshop(); };
+  loadWorkshop();
+}
+
+async function loadWorkshop() {
+  if (wsProject === null) return;
+  const data = await api.get("/api/workspace?project_id=" + wsProject);
+  const fEl = document.getElementById("ws-files");
+  if (!fEl) return;
+  fEl.innerHTML = data.files.length ? data.files.map(f =>
+    `<div class="agent-row" style="cursor:pointer;padding:8px 11px" onclick="viewFile('${encodeURIComponent(f.path)}')">
+      <i data-lucide="file" style="width:16px"></i><div class="info"><b style="font-size:13px">${esc(f.path)}</b></div>
+      <span class="tag">${f.size} B</span></div>`).join("") : `<div class="muted">Noch keine Dateien. Entwickler-Agenten legen hier Dateien an.</div>`;
+  const cons = await api.get("/api/console?project_id=" + wsProject);
+  const cEl = document.getElementById("ws-console");
+  cEl.innerHTML = cons.length ? cons.map(e =>
+    `<div class="msg ${e.kind === 'exec' ? 'from-agent' : ''}" style="font-family:ui-monospace,monospace;font-size:12px">
+      <div class="meta">${e.kind} · ${new Date(e.created_at).toLocaleTimeString("de-DE")}</div>
+      <div class="body">${esc(e.text)}</div></div>`).join("") : `<div class="muted">Noch keine Ausführungen.</div>`;
+  icons();
+}
+
+window.viewFile = async function (p) {
+  const r = await api.get(`/api/workspace/file?project_id=${wsProject}&path=${p}`);
+  document.getElementById("ws-view").textContent = r.content || "(leer)";
+};
+
 // ---------- Approvals ----------
 async function renderApprovals() {
   const items = await api.get("/api/approvals");
@@ -231,6 +280,7 @@ async function renderSettings() {
         <div class="row"><div class="toggle" id="s-run"><div class="switch ${s.auto_run ? "on" : ""}"></div> Agenten laufen automatisch</div></div>
         <div class="row" style="margin-top:10px"><div class="toggle" id="s-hire"><div class="switch ${s.require_approval_hire ? "on" : ""}"></div> Einstellung freigeben</div></div>
         <div class="row" style="margin-top:10px"><div class="toggle" id="s-fire"><div class="switch ${s.require_approval_fire ? "on" : ""}"></div> Kündigung freigeben</div></div>
+        <div class="row" style="margin-top:10px"><div class="toggle" id="s-code"><div class="switch ${s.enable_code_exec ? "on" : ""}"></div> Code-Werkstatt (Dateien & Ausführung) erlauben</div></div>
         <label style="margin-top:12px">Kündigungsschwelle (Ø Bewertung)</label>
         <input id="s-thresh" type="number" min="1" max="5" step="0.5" value="${s.fire_threshold}" />
       </div>
@@ -246,10 +296,21 @@ async function renderSettings() {
       <span class="muted" id="s-status" style="margin-left:10px"></span></div>
     <div class="card" style="margin-top:16px"><h3><i data-lucide="plug"></i> Provider-Status</h3>
       ${Object.entries(s.providers_available).map(([k, v]) => `<span class="pill ${v ? "employed" : "resigned"}" style="margin-right:8px">${k}: ${v ? "verfügbar" : "Mock"}</span>`).join("")}
+    </div>
+    <div class="card" style="margin-top:16px"><h3><i data-lucide="server"></i> Lokale Modelle (Ollama)</h3>
+      <div class="row" style="margin-bottom:10px"><input id="ol-name" placeholder="Modell ziehen, z. B. llama3.1" style="margin:0"/>
+        <button class="btn sm" id="ol-pull"><i data-lucide="download"></i> Ziehen</button></div>
+      <div id="ol-list"><div class="muted">lade …</div></div>
     </div>`;
   icons();
+  loadOllama();
+  document.getElementById("ol-pull").onclick = async () => {
+    const n = document.getElementById("ol-name").value.trim(); if (!n) return;
+    document.getElementById("ol-pull").textContent = "lädt …";
+    await api.post("/api/ollama/pull", { name: n }); loadOllama();
+  };
   const toggles = {};
-  ["s-run", "s-hire", "s-fire"].forEach(id => {
+  ["s-run", "s-hire", "s-fire", "s-code"].forEach(id => {
     const el = document.getElementById(id);
     toggles[id] = el.querySelector(".switch").classList.contains("on");
     el.onclick = () => { const sw = el.querySelector(".switch"); sw.classList.toggle("on"); toggles[id] = sw.classList.contains("on"); };
@@ -259,6 +320,7 @@ async function renderSettings() {
       autonomy_level: document.getElementById("s-autonomy").value,
       auto_run: toggles["s-run"], require_approval_hire: toggles["s-hire"], require_approval_fire: toggles["s-fire"],
       fire_threshold: parseFloat(document.getElementById("s-thresh").value),
+      enable_code_exec: toggles["s-code"],
       default_chef_provider: document.getElementById("s-cp").value, default_chef_model: document.getElementById("s-cm").value,
       default_worker_provider: document.getElementById("s-wp").value, default_worker_model: document.getElementById("s-wm").value,
       allowed_providers: document.getElementById("s-allowed").value,
@@ -266,6 +328,28 @@ async function renderSettings() {
     document.getElementById("s-status").textContent = "✓ gespeichert";
   };
 }
+
+async function loadOllama() {
+  const el = document.getElementById("ol-list");
+  if (!el) return;
+  const st = await api.get("/api/ollama/status");
+  if (!st.reachable) { el.innerHTML = `<div class="muted">Ollama nicht erreichbar (Container aus?).</div>`; return; }
+  if (!st.models.length) { el.innerHTML = `<div class="muted">Keine lokalen Modelle. Oben eines ziehen.</div>`; return; }
+  el.innerHTML = st.models.map(m => `<div class="agent-row" style="padding:9px 11px">
+      <i data-lucide="box" style="width:18px"></i>
+      <div class="info"><b style="font-size:13px">${esc(m.name)}</b><small>${(m.size / 1e9).toFixed(2)} GB</small></div>
+      <span class="pill ${m.loaded ? "employed" : "resigned"}">${m.loaded ? "im RAM" : "entladen"}</span>
+      ${m.loaded
+        ? `<button class="btn ghost sm" onclick="olAct('unload','${esc(m.name)}')"><i data-lucide="power"></i> entladen</button>`
+        : `<button class="btn sm" onclick="olAct('load','${esc(m.name)}')"><i data-lucide="play"></i> laden</button>`}
+      <button class="btn red sm" onclick="olAct('delete','${esc(m.name)}')"><i data-lucide="trash-2"></i></button>
+    </div>`).join("");
+  icons();
+}
+window.olAct = async (action, name) => {
+  await api.post("/api/ollama/" + action, { name });
+  loadOllama();
+};
 
 // ---------- Helpers ----------
 function setupCollapse() {
@@ -291,5 +375,6 @@ refreshBadges();
 setInterval(() => {
   refreshBadges();
   if (currentView === "inbox") loadThread();
+  else if (currentView === "workshop") loadWorkshop();
   else if (["activity", "approvals", "tasks", "org"].includes(currentView)) render();
 }, 5000);

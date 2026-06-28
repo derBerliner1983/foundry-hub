@@ -55,10 +55,45 @@ Dann im Browser: **http://localhost:8000**
 - **Team / Org** – Organigramm mit Bewertungs-Donut, Status, Detailansicht +
   eigene Bewertung pro Agent.
 - **Aufgaben** – alle Arbeitspakete nach Status (offen / in Arbeit / erledigt).
+- **Werkstatt** – pro Projekt ein Datei-Workspace + Konsole: Entwickler-Agenten
+  schreiben echte Dateien und führen Befehle/Tests aus (Sandbox).
 - **Freigaben** – Einstellungen/Kündigungen bestätigen oder ablehnen.
 - **Aktivität** – Live-Log aller Ereignisse.
 - **Einstellungen** – Autonomie-Stufe, Freigabe-Pflichten, Kündigungsschwelle,
-  Standardmodelle pro Rolle, erlaubte Provider, Hell/Dunkel.
+  Standardmodelle pro Rolle, erlaubte Provider, Code-Werkstatt an/aus,
+  **Ollama-Modellverwaltung** und Hell/Dunkel.
+
+## Code-Werkstatt (echte Dateien & Ausführung)
+
+Entwickler- und QA-Agenten können in ihrem **Projekt-Workspace** (`/data/workspace/project_<id>`)
+echte Dateien anlegen und Befehle ausführen:
+
+- `write_file` – Datei schreiben · `read_file` – Datei lesen
+- `run_command` – Befehl im Workspace ausführen; die Ausgabe geht als Nachricht
+  an den Agenten zurück, sodass er iterieren kann (Schreiben → Testen → Korrigieren).
+
+Schutz: Pfade sind auf den Workspace begrenzt (kein Ausbruch), Befehle haben ein
+**Timeout** (`EXEC_TIMEOUT`) und ein **Limit pro Aufgabe** (`MAX_EXEC_PER_TASK`).
+In den Einstellungen lässt sich die Werkstatt komplett abschalten
+(`ENABLE_CODE_EXECUTION`).
+
+> ⚠️ Die Sandbox läuft im App-Container. Für echten Produktivbetrieb solltest du
+> einen isolierten Runner-Container ohne Zugriff auf sensible Daten verwenden.
+
+## Lokale Modelle (Ollama) verwalten
+
+Unter **Einstellungen → Lokale Modelle (Ollama)** kannst du:
+
+- installierte Modelle sehen (inkl. Größe und **RAM-Status**),
+- Modelle **ziehen** (`pull`),
+- Modelle **in den RAM laden** bzw. **entladen**, um den Ollama-Server zu
+  entlasten, wenn sie gerade nicht gebraucht werden – so lassen sich bei Bedarf
+  auch größere/bessere Modelle wechselweise nutzen,
+- Modelle **löschen**.
+
+Beim Start zieht das System ein Standardmodell (`OLLAMA_AUTO_MODEL`) **nur dann**,
+wenn noch **gar kein** Modell installiert ist. Ist bereits eines vorhanden, wird
+nichts automatisch geladen.
 
 ## Architektur
 

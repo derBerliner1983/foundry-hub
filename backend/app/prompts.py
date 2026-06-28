@@ -18,6 +18,11 @@ Erlaubte Aktionen (verwende nur, was zu deiner Rolle passt):
 - {"type":"fire","agent_id":<id>,"reason":"..."}
 - {"type":"resign","reason":"..."}   (wenn du selbst kündigen willst)
 
+Code-Werkstatt (vor allem für Entwickler/QA – echte Dateien & Ausführung):
+- {"type":"write_file","path":"relativer/pfad.py","content":"<dateiinhalt>"}
+- {"type":"run_command","cmd":"python pfad.py"}   (läuft im Projekt-Workspace, Ergebnis bekommst du als Nachricht zurück)
+- {"type":"read_file","path":"relativer/pfad.py"}
+
 Regeln:
 - Arbeite selbständig. Frage den Nutzer NUR über ask_user, wenn du ohne seine Entscheidung nicht weiterkommst.
 - provider/model bei hire weglassen heißt: Standardmodell verwenden.

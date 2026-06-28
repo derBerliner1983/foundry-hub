@@ -5,6 +5,7 @@ import re
 from sqlalchemy import func, or_
 
 from . import providers
+from . import workspace
 from .config import config
 from .models import (
     Agent,
@@ -161,6 +162,12 @@ def execute_actions(db, agent: Agent, settings: Settings, parsed: dict, current_
                 assign = int(assign) if assign is not None else None
             except (ValueError, TypeError):
                 assign = None
+            # Fallback: neuestem beschäftigten Teammitglied zuweisen
+            if assign is None:
+                newest = (db.query(Agent)
+                          .filter(Agent.manager_id == agent.id, Agent.status == "employed")
+                          .order_by(Agent.id.desc()).first())
+                assign = newest.id if newest else None
             t = Task(project_id=agent.project_id, title=act.get("title", "Aufgabe"),
                      description=act.get("description", ""), assigned_agent_id=assign,
                      created_by_agent_id=agent.id, status="todo")
@@ -195,8 +202,53 @@ def execute_actions(db, agent: Agent, settings: Settings, parsed: dict, current_
             log(db, "rating", f"#{ratee} mit {score}/5 bewertet", agent_id=agent.id)
             _maybe_auto_fire(db, agent, settings, ratee)
 
+        # ---------- Code-Werkstatt ----------
+        elif atype == "write_file":
+            if not settings.enable_code_exec:
+                log(db, "error", "Datei schreiben gesperrt (Einstellungen)", agent_id=agent.id)
+                continue
+            try:
+                rel = workspace.write_file(agent.project_id, act.get("path", "datei.txt"),
+                                           act.get("content", ""))
+                log(db, "file", f"Datei geschrieben: {rel}", agent_id=agent.id)
+            except Exception as e:  # noqa: BLE001
+                log(db, "error", f"Datei-Fehler: {e}", agent_id=agent.id)
+
+        elif atype == "run_command":
+            _do_run_command(db, agent, settings, act, current_task)
+
+        elif atype == "read_file":
+            content = workspace.read_file(agent.project_id, act.get("path", ""))
+            log(db, "file", f"Datei gelesen: {act.get('path','')} ({len(content)} Z.)", agent_id=agent.id)
+            # Inhalt dem Agenten als Systemnachricht zurückgeben
+            send_message(db, sender_kind="system", sender_agent_id=None,
+                         recipient_kind="agent", recipient_agent_id=agent.id,
+                         subject=f"Inhalt {act.get('path','')}", body=content[:4000])
+
     # Eingehende Aufgabe als in Bearbeitung markieren, falls nichts abgeschlossen
     db.commit()
+
+
+def _do_run_command(db, agent, settings, act, current_task):
+    if not settings.enable_code_exec:
+        log(db, "error", "Befehlsausführung gesperrt (Einstellungen)", agent_id=agent.id)
+        return
+    if current_task and current_task.exec_count >= config.MAX_EXEC_PER_TASK:
+        log(db, "error", f"Befehlslimit ({config.MAX_EXEC_PER_TASK}) erreicht", agent_id=agent.id)
+        return
+    cmd = act.get("cmd") or act.get("command") or ""
+    res = workspace.run_command(agent.project_id, cmd)
+    if current_task:
+        current_task.exec_count = (current_task.exec_count or 0) + 1
+    status = "ok" if res["ok"] else f"Fehler ({res['code']})"
+    out = (res["stdout"] + ("\n" + res["stderr"] if res["stderr"] else ""))[:1500]
+    log(db, "exec", f"$ {cmd}  → {status}\n{out}", agent_id=agent.id)
+    # Ergebnis dem Agenten zurückspielen, damit er iterieren kann (Cap schützt vor Endlosschleife)
+    if not current_task or current_task.exec_count < config.MAX_EXEC_PER_TASK:
+        send_message(db, sender_kind="system", sender_agent_id=None,
+                     recipient_kind="agent", recipient_agent_id=agent.id,
+                     subject=f"Befehlsergebnis ({status})",
+                     body=f"$ {cmd}\n{out}", project_id=agent.project_id)
 
 
 def _resolve_recipient(agent, to):

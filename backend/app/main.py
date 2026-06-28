@@ -8,8 +8,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from . import ollama_admin
 from . import orchestrator as orch
 from . import providers
+from . import workspace
 from .config import config
 from .database import Base, SessionLocal, engine
 from .models import (
@@ -42,6 +44,16 @@ async def startup():
     finally:
         db.close()
     asyncio.create_task(orchestrator_loop())
+    asyncio.create_task(_startup_ollama())
+
+
+async def _startup_ollama():
+    """Zieht beim Start ein lokales Modell – nur falls noch keines vorhanden ist."""
+    try:
+        res = await ollama_admin.ensure_default_model()
+        print("Ollama Auto-Modell:", res)
+    except Exception as e:  # noqa: BLE001
+        print("Ollama-Start übersprungen:", e)
 
 
 async def orchestrator_loop():
@@ -116,6 +128,7 @@ class SettingsUpdate(BaseModel):
     require_approval_hire: bool | None = None
     require_approval_fire: bool | None = None
     fire_threshold: float | None = None
+    enable_code_exec: bool | None = None
 
 
 class UserRating(BaseModel):
@@ -338,6 +351,7 @@ def get_settings():
             "require_approval_hire": s.require_approval_hire,
             "require_approval_fire": s.require_approval_fire,
             "fire_threshold": s.fire_threshold,
+            "enable_code_exec": s.enable_code_exec,
             "providers_available": providers.available_providers(),
             "roles": {k: role_title(k) for k in ROLES},
         }
@@ -356,6 +370,74 @@ def update_settings(upd: SettingsUpdate):
         return {"ok": True}
     finally:
         db.close()
+
+
+# --------------------------------------------------------------------------- #
+# Code-Werkstatt
+# --------------------------------------------------------------------------- #
+@app.get("/api/projects")
+def list_projects():
+    db = SessionLocal()
+    try:
+        return [{"id": p.id, "title": p.title, "status": p.status}
+                for p in db.query(Project).order_by(Project.id.desc()).all()]
+    finally:
+        db.close()
+
+
+@app.get("/api/workspace")
+def workspace_files(project_id: int | None = None):
+    return {"project_id": project_id, "files": workspace.list_files(project_id)}
+
+
+@app.get("/api/workspace/file")
+def workspace_file(path: str, project_id: int | None = None):
+    return {"path": path, "content": workspace.read_file(project_id, path)}
+
+
+@app.get("/api/console")
+def console(project_id: int | None = None):
+    """Letzte Befehlsausführungen (aus dem Event-Log)."""
+    db = SessionLocal()
+    try:
+        evs = (db.query(Event).filter(Event.kind.in_(["exec", "file"]))
+               .order_by(Event.id.desc()).limit(60).all())
+        return [{"id": e.id, "kind": e.kind, "text": e.text,
+                 "created_at": e.created_at.isoformat()} for e in evs]
+    finally:
+        db.close()
+
+
+# --------------------------------------------------------------------------- #
+# Ollama-Verwaltung (lokale Modelle)
+# --------------------------------------------------------------------------- #
+class OllamaModel(BaseModel):
+    name: str
+
+
+@app.get("/api/ollama/status")
+async def ollama_status():
+    return await ollama_admin.status()
+
+
+@app.post("/api/ollama/pull")
+async def ollama_pull(m: OllamaModel):
+    return await ollama_admin.pull(m.name)
+
+
+@app.post("/api/ollama/load")
+async def ollama_load(m: OllamaModel):
+    return await ollama_admin.load(m.name)
+
+
+@app.post("/api/ollama/unload")
+async def ollama_unload(m: OllamaModel):
+    return await ollama_admin.unload(m.name)
+
+
+@app.post("/api/ollama/delete")
+async def ollama_delete(m: OllamaModel):
+    return await ollama_admin.delete(m.name)
 
 
 # --------------------------------------------------------------------------- #
