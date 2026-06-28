@@ -3,7 +3,7 @@ import asyncio
 import json
 import os
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -1023,6 +1023,37 @@ def workspace_files(project_id: int | None = None):
 @app.get("/api/workspace/file")
 def workspace_file(path: str, project_id: int | None = None):
     return {"path": path, "content": workspace.read_file(project_id, path)}
+
+
+@app.post("/api/workspace/upload")
+async def workspace_upload(project_id: int | None = Form(None), file: UploadFile = File(...)):
+    """Lädt eine Datei in den Projekt-Workspace (für Specs, Designs, Daten)."""
+    data = await file.read()
+    try:
+        rel = workspace.save_bytes(project_id, file.filename or "upload.bin", data)
+        return {"ok": True, "path": rel, "size": len(data)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/workspace/download")
+def workspace_download(path: str, project_id: int | None = None):
+    """Lädt eine einzelne Datei herunter."""
+    try:
+        target = workspace.safe_abspath(project_id, path)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "Ungültiger Pfad")
+    if not os.path.isfile(target):
+        raise HTTPException(404, "Datei nicht gefunden")
+    return FileResponse(target, filename=os.path.basename(target))
+
+
+@app.get("/api/workspace/zip")
+def workspace_zip(project_id: int | None = None):
+    """Lädt den gesamten Projekt-Workspace als ZIP herunter."""
+    path = workspace.make_zip(project_id)
+    return FileResponse(path, filename=f"project_{project_id or 'shared'}.zip",
+                        media_type="application/zip")
 
 
 @app.get("/api/sandbox/status")

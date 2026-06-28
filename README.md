@@ -176,6 +176,16 @@ Agenten **echt installieren und bauen**:
   behebt** (Schreiben → Bauen → Fehler lesen → Korrigieren).
 - Status & „Workspace leeren" in der **Werkstatt**-Ansicht.
 
+**Versionierung & Rollback.** Jede Runde mit Dateiänderungen wird automatisch
+versioniert (Git); verifizierte Stände sind als „[verified]" markiert. In der
+*Werkstatt* siehst du den **Versions-Verlauf** und kannst per Klick auf einen
+früheren (funktionierenden) Stand **zurückrollen** – Agenten können das per
+`rollback` auch selbst, wenn sie etwas kaputt gemacht haben.
+
+**Dateien rein & raus.** Eigene Dateien (Specs, Designs, Daten) **hochladen**,
+einzelne Dateien oder den **ganzen Workspace als ZIP herunterladen** (fertige
+Builds wie EXE/APK inklusive).
+
 > **Was geht / was nicht:** Linux-/Windows-/Android-Artefakte sind machbar.
 > **Apple-Apps (.ipa/.app) brauchen macOS + Xcode** und sind in einem
 > Linux-Container **nicht** baubar – dafür wäre ein macOS-Build-Runner nötig.
@@ -278,6 +288,15 @@ Unter *Einstellungen → Zeitplan* legst du fest, **wann** die Agenten aktiv wer
 Der Status oben rechts zeigt den aktuellen Modus (läuft / Zeitfenster / manuell /
 pausiert). Der Hauptschalter *Agenten laufen automatisch* pausiert alles.
 
+### Budget & Kosten
+
+AI-Hub erfasst den **Token-Verbrauch** jedes LLM-Aufrufs und schätzt die Kosten
+je Modell (lokale Modelle = 0). Unter *Einstellungen → Budget* siehst du den
+Verbrauch (gesamt, je Modell) und setzt ein **Budget-Limit (USD)**: Wird es
+überschritten, **pausiert die Firma automatisch** (einmalige Meldung); ein
+höheres Limit hebt die Pause wieder auf. Eine Kosten-Kachel steht im Dashboard.
+*(Preise sind Richtwerte und in `backend/app/costs.py` anpassbar.)*
+
 ### Bewertung, Kündigung & Modelle
 
 - **Bewertung 1–5** pro Leistung – durch Manager und durch dich. Durchschnitt wird
@@ -334,6 +353,7 @@ Kontext (Rolle, Team, Nachrichten, Aufgaben, **geltende Regeln**, verfügbare
 | `rate` | Leistung eines Mitarbeiters bewerten (1–5) |
 | `write_file` / `read_file` / `run_command` | Code-Werkstatt (echte Dateien, Installation & Builds im Sandbox-Container) |
 | `reset_workspace` | installierte Software/Builds wieder entfernen |
+| `rollback` | Workspace auf einen früheren (funktionierenden) Stand zurückrollen |
 | `add_rule` | Standard/Regel im Cookbook anlegen |
 | `use_skill` | Skill nutzen (Befehl ausführen oder Vorgehen anwenden) |
 | `mcp_call` | Echtes MCP-Tool eines verbundenen Servers aufrufen |

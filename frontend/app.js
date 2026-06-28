@@ -392,7 +392,10 @@ async function renderWorkshop() {
       <div class="row"><h3 style="margin:0"><i data-lucide="folder-code"></i> Projekt-Workspace</h3>
         <div class="spacer" style="flex:1"></div>
         <span id="ws-sandbox" class="tag">Sandbox …</span>
-        <button class="btn ghost sm" id="ws-reset"><i data-lucide="trash-2"></i> Workspace leeren</button>
+        <input type="file" id="ws-upload" class="hidden"/>
+        <button class="btn ghost sm" id="ws-up"><i data-lucide="upload"></i> Hochladen</button>
+        <button class="btn ghost sm" id="ws-zip"><i data-lucide="download"></i> ZIP</button>
+        <button class="btn ghost sm" id="ws-reset"><i data-lucide="trash-2"></i> leeren</button>
         <select id="ws-proj" style="width:auto;margin:0">${opts || '<option>kein Projekt</option>'}</select></div>
     </div>
     <div class="grid cols-2">
@@ -414,6 +417,16 @@ async function renderWorkshop() {
     await api.post("/api/sandbox/reset?project_id=" + (wsProject || ""));
     loadWorkshop();
   };
+  document.getElementById("ws-up").onclick = () => document.getElementById("ws-upload").click();
+  document.getElementById("ws-upload").onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const fd = new FormData(); fd.append("file", f); if (wsProject) fd.append("project_id", wsProject);
+    await fetch("/api/workspace/upload", { method: "POST", body: fd });
+    loadWorkshop();
+  };
+  document.getElementById("ws-zip").onclick = () => {
+    window.open("/api/workspace/zip?project_id=" + (wsProject || ""), "_blank");
+  };
   api.get("/api/sandbox/status").then(st => {
     const el = document.getElementById("ws-sandbox"); if (!el) return;
     if (st.enabled && st.reachable) el.innerHTML = `<span style="color:var(--green)">● Build-Container aktiv</span>`;
@@ -429,9 +442,12 @@ async function loadWorkshop() {
   const fEl = document.getElementById("ws-files");
   if (!fEl) return;
   fEl.innerHTML = data.files.length ? data.files.map(f =>
-    `<div class="agent-row" style="cursor:pointer;padding:8px 11px" onclick="viewFile('${encodeURIComponent(f.path)}')">
-      <i data-lucide="file" style="width:16px"></i><div class="info"><b style="font-size:13px">${esc(f.path)}</b></div>
-      <span class="tag">${f.size} B</span></div>`).join("") : `<div class="muted">Noch keine Dateien. Entwickler-Agenten legen hier Dateien an.</div>`;
+    `<div class="agent-row" style="padding:8px 11px">
+      <i data-lucide="file" style="width:16px"></i>
+      <div class="info" style="cursor:pointer" onclick="viewFile('${encodeURIComponent(f.path)}')"><b style="font-size:13px">${esc(f.path)}</b></div>
+      <span class="tag">${f.size} B</span>
+      <a class="btn ghost sm" href="/api/workspace/download?project_id=${wsProject || ''}&path=${encodeURIComponent(f.path)}" download><i data-lucide="download"></i></a>
+    </div>`).join("") : `<div class="muted">Noch keine Dateien. Entwickler-Agenten legen hier Dateien an, oder lade selbst welche hoch.</div>`;
   const git = await api.get("/api/git/history?project_id=" + wsProject);
   const gEl = document.getElementById("ws-git");
   if (gEl) gEl.innerHTML = git.history.length ? git.history.map(h => `<div class="agent-row" style="padding:8px 11px">

@@ -36,6 +36,34 @@ def write_file(project_id, rel_path: str, content: str) -> str:
     return os.path.relpath(target, _project_root(project_id))
 
 
+def safe_abspath(project_id, rel_path: str) -> str:
+    """Sicherer absoluter Pfad innerhalb des Projekt-Workspace (für Download)."""
+    return _safe_path(project_id, rel_path)
+
+
+def save_bytes(project_id, rel_path: str, data: bytes) -> str:
+    target = _safe_path(project_id, rel_path)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    with open(target, "wb") as f:
+        f.write(data or b"")
+    return os.path.relpath(target, _project_root(project_id))
+
+
+def make_zip(project_id) -> str:
+    """Packt den Projekt-Workspace in eine ZIP und gibt den Pfad zurück."""
+    import tempfile
+    import zipfile
+    root = _project_root(project_id)
+    fd, path = tempfile.mkstemp(suffix=".zip", prefix=f"project_{project_id or 'shared'}_")
+    os.close(fd)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for base, _dirs, files in os.walk(root):
+            for fn in files:
+                full = os.path.join(base, fn)
+                z.write(full, os.path.relpath(full, root))
+    return path
+
+
 def read_file(project_id, rel_path: str) -> str:
     target = _safe_path(project_id, rel_path)
     if not os.path.isfile(target):
