@@ -177,6 +177,7 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
     last_hired_id = None
     # Projektkontext: Projekt der ausgelösten Nachricht/Aufgabe, sonst eigenes Projekt
     pctx = project_ctx if project_ctx is not None else agent.project_id
+    files_changed = False  # für Git-Auto-Commit am Rundenende
 
     for act in actions:
         atype = act.get("type")
@@ -300,16 +301,25 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
             try:
                 rel = workspace.write_file(pctx, act.get("path", "datei.txt"),
                                            act.get("content", ""))
+                files_changed = True
                 log(db, "file", f"Datei geschrieben: {rel}", agent_id=agent.id)
             except Exception as e:  # noqa: BLE001
                 log(db, "error", f"Datei-Fehler: {e}", agent_id=agent.id)
 
         elif atype == "run_command":
             _do_run_command(db, agent, settings, act, current_task, pctx)
+            files_changed = True
 
         elif atype == "reset_workspace":
             res = workspace.reset_workspace(pctx, act.get("path", ""))
+            files_changed = True
             log(db, "exec", f"Workspace zurückgesetzt ({'ok' if res.get('ok') else res.get('stderr','Fehler')})",
+                agent_id=agent.id)
+
+        elif atype == "rollback":
+            commit = act.get("commit", "")
+            res = workspace.git_rollback(pctx, commit) if commit else {"ok": False, "stderr": "Kein Commit"}
+            log(db, "git", f"Rollback auf {commit}: {'ok' if res.get('ok') else res.get('stderr','Fehler')}",
                 agent_id=agent.id)
 
         elif atype == "read_file":
@@ -360,6 +370,14 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
             if ms:
                 ms.status = "in_progress"
                 log(db, "milestone", f"Meilenstein gestartet: {ms.title}", agent_id=agent.id)
+
+    # Git-Auto-Commit, wenn diese Runde Dateien verändert hat (Checkpoint für Rollback)
+    if files_changed and settings.enable_code_exec:
+        verified = bool(current_task and current_task.verified)
+        msg = f"{agent.name}: Arbeitsstand" + (" [verified]" if verified else "")
+        res = workspace.git_autocommit(pctx, msg)
+        if res.get("ok"):
+            log(db, "git", f"Checkpoint gesichert{' [verified]' if verified else ''}", agent_id=agent.id)
 
     # Eingehende Aufgabe als in Bearbeitung markieren, falls nichts abgeschlossen
     db.commit()

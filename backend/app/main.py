@@ -1015,6 +1015,22 @@ def sandbox_reset(project_id: int | None = None):
     return workspace.reset_workspace(project_id)
 
 
+@app.get("/api/git/history")
+def git_history(project_id: int | None = None):
+    return {"history": workspace.git_history(project_id)}
+
+
+class RollbackIn(BaseModel):
+    project_id: int | None = None
+    commit: str
+
+
+@app.post("/api/git/rollback")
+def git_rollback(r: RollbackIn):
+    res = workspace.git_rollback(r.project_id, r.commit)
+    return res
+
+
 @app.get("/api/console")
 def console(project_id: int | None = None):
     """Letzte Befehlsausführungen (aus dem Event-Log)."""

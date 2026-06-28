@@ -97,6 +97,59 @@ def run_command(project_id, command: str) -> dict:
         return {"ok": False, "stdout": "", "stderr": str(e), "code": -1}
 
 
+def _ws_exec(project_id, command: str, timeout: int = 60) -> dict:
+    """Führt einen Befehl im Workspace aus (für Infrastruktur wie Git) –
+    unabhängig vom Code-Ausführungs-Schalter."""
+    if config.SANDBOX_URL:
+        try:
+            r = httpx.post(f"{config.SANDBOX_URL}/exec",
+                           json={"cmd": command, "cwd": _project_rel(project_id), "timeout": timeout},
+                           timeout=timeout + 15)
+            d = r.json()
+            return {"ok": d.get("ok", False), "stdout": d.get("stdout", ""), "stderr": d.get("stderr", "")}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "stdout": "", "stderr": str(e)}
+    root = _project_root(project_id)
+    try:
+        p = subprocess.run(command, shell=True, cwd=root, capture_output=True, text=True, timeout=timeout)
+        return {"ok": p.returncode == 0, "stdout": p.stdout or "", "stderr": p.stderr or ""}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "stdout": "", "stderr": str(e)}
+
+
+_GIT = "git -c user.email=aihub@local -c user.name=AI-Hub"
+
+
+def git_autocommit(project_id, message: str) -> dict:
+    """Versioniert den aktuellen Arbeitsstand (init bei Bedarf)."""
+    _ws_exec(project_id, "git init -q 2>/dev/null; git symbolic-ref HEAD refs/heads/main 2>/dev/null")
+    _ws_exec(project_id, f"{_GIT} add -A")
+    msg = (message or "Arbeitsstand").replace('"', "'")[:200]
+    res = _ws_exec(project_id, f'{_GIT} commit -q -m "{msg}"')
+    return res
+
+
+def git_history(project_id, n: int = 25) -> list:
+    res = _ws_exec(project_id, f"{_GIT} log --pretty=format:'%h|%ad|%s' --date=format:'%d.%m. %H:%M' -{n}")
+    if not res["ok"] or not res["stdout"].strip():
+        return []
+    out = []
+    for line in res["stdout"].strip().splitlines():
+        parts = line.split("|", 2)
+        if len(parts) == 3:
+            out.append({"sha": parts[0], "date": parts[1], "message": parts[2],
+                        "verified": "[verified]" in parts[2]})
+    return out
+
+
+def git_rollback(project_id, commit: str) -> dict:
+    """Setzt den Workspace hart auf einen früheren Commit zurück."""
+    safe = "".join(c for c in (commit or "") if c.isalnum())
+    if not safe:
+        return {"ok": False, "stderr": "Ungültiger Commit"}
+    return _ws_exec(project_id, f"{_GIT} reset --hard {safe}")
+
+
 def reset_workspace(project_id, path: str = "") -> dict:
     """Löscht installierte Software/Builds wieder (innerhalb des Projekt-Workspace)."""
     if config.SANDBOX_URL:

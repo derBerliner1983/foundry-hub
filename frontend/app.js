@@ -400,6 +400,10 @@ async function renderWorkshop() {
     <div class="panel" style="margin-top:14px">
       <div class="panel-head"><i data-lucide="terminal"></i> <b>Konsole / Ausführungen</b><i data-lucide="chevron-down" class="chev"></i></div>
       <div class="panel-body" id="ws-console"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><i data-lucide="git-branch"></i> <b>Versionen / Rollback</b><i data-lucide="chevron-down" class="chev"></i></div>
+      <div class="panel-body" id="ws-git"></div>
     </div>`;
   icons(); setupCollapse();
   document.getElementById("ws-proj").onchange = e => { wsProject = e.target.value; loadWorkshop(); };
@@ -426,6 +430,13 @@ async function loadWorkshop() {
     `<div class="agent-row" style="cursor:pointer;padding:8px 11px" onclick="viewFile('${encodeURIComponent(f.path)}')">
       <i data-lucide="file" style="width:16px"></i><div class="info"><b style="font-size:13px">${esc(f.path)}</b></div>
       <span class="tag">${f.size} B</span></div>`).join("") : `<div class="muted">Noch keine Dateien. Entwickler-Agenten legen hier Dateien an.</div>`;
+  const git = await api.get("/api/git/history?project_id=" + wsProject);
+  const gEl = document.getElementById("ws-git");
+  if (gEl) gEl.innerHTML = git.history.length ? git.history.map(h => `<div class="agent-row" style="padding:8px 11px">
+    <i data-lucide="${h.verified ? 'badge-check' : 'git-commit'}" style="width:16px;color:${h.verified ? 'var(--green)' : 'var(--text-dim)'}"></i>
+    <div class="info"><b style="font-size:13px">${esc(h.message)}</b><small>${esc(h.date)} · ${esc(h.sha)}</small></div>
+    <button class="btn ghost sm" onclick="rollbackTo('${esc(h.sha)}')"><i data-lucide="rotate-ccw"></i> hierhin zurück</button></div>`).join("")
+    : `<div class="muted">Noch keine Versionen. Sie entstehen automatisch, wenn Agenten Dateien ändern.</div>`;
   const cons = await api.get("/api/console?project_id=" + wsProject);
   const cEl = document.getElementById("ws-console");
   cEl.innerHTML = cons.length ? cons.map(e =>
@@ -438,6 +449,12 @@ async function loadWorkshop() {
 window.viewFile = async function (p) {
   const r = await api.get(`/api/workspace/file?project_id=${wsProject}&path=${p}`);
   document.getElementById("ws-view").textContent = r.content || "(leer)";
+};
+window.rollbackTo = async function (sha) {
+  if (!confirm("Workspace auf Version " + sha + " zurücksetzen? Spätere Änderungen gehen verloren.")) return;
+  const r = await api.post("/api/git/rollback", { project_id: wsProject ? Number(wsProject) : null, commit: sha });
+  if (!r.ok) alert("Rollback fehlgeschlagen: " + (r.stderr || ""));
+  loadWorkshop();
 };
 
 // ---------- Projekte ----------
