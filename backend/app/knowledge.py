@@ -7,6 +7,7 @@ import re
 
 from . import context
 from . import embeddings
+from . import vault
 from .database import SessionLocal
 from .models import Decision, Document
 
@@ -56,6 +57,9 @@ def search(query: str, limit: int = 5) -> list:
             sc = _score(blob, terms)
             if sc:
                 results.append((sc, "🧠 frühere Entscheidung", _snippet(blob, terms)))
+        # Obsidian-Vault (Gehirn) mit einbeziehen
+        for v in vault.search(terms, limit):
+            results.append((50, v["source"], v["snippet"]))
         results.sort(key=lambda x: -x[0])
         return [{"source": s, "snippet": sn} for _, s, sn in results[:limit]]
     finally:

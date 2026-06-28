@@ -34,8 +34,12 @@ services:
       - EXEC_TIMEOUT=${EXEC_TIMEOUT:-60}
       - WORKSPACE_DIR=/data/workspace
       - SANDBOX_URL=${SANDBOX_URL:-http://sandbox:8800}
+      - OBSIDIAN_VAULT=${OBSIDIAN_VAULT:-/data/vault}
     volumes:
       - aihub-data:/data
+      # Für Obsidian: hier deinen Vault-Ordner einhängen, z. B.:
+      #   - /pfad/zu/deinem/Obsidian-Vault:/data/vault
+      - aihub-vault:/data/vault
     depends_on:
       - ollama
       - sandbox
@@ -69,4 +73,5 @@ services:
 
 volumes:
   aihub-data:
+  aihub-vault:
   ollama-data:

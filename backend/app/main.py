@@ -781,6 +781,28 @@ def list_tasks():
         db.close()
 
 
+class TaskUpdate(BaseModel):
+    status: str | None = None
+
+
+@app.put("/api/tasks/{task_id}")
+def update_task(task_id: int, u: TaskUpdate):
+    db = SessionLocal()
+    try:
+        t = db.get(Task, task_id)
+        if not t or t.tenant_id != context.tid():
+            raise HTTPException(404, "Aufgabe nicht gefunden")
+        if u.status in ("todo", "in_progress", "review", "done", "failed"):
+            t.status = u.status
+            if u.status == "done":
+                t.verified = True
+                orch._refresh_milestone_status(db, t.milestone_id, None)
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
 @app.post("/api/ratings")
 def rate(r: UserRating):
     db = SessionLocal()
@@ -1761,10 +1783,21 @@ def add_knowledge(d: DocIn):
 async def upload_knowledge(file: UploadFile = File(...)):
     from .models import Document
     raw = await file.read()
-    try:
-        text = raw.decode("utf-8", errors="replace")
-    except Exception:  # noqa: BLE001
-        text = ""
+    fn = (file.filename or "").lower()
+    text = ""
+    if fn.endswith(".pdf"):
+        try:
+            import io
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(raw))
+            text = "\n".join((pg.extract_text() or "") for pg in reader.pages)
+        except Exception:  # noqa: BLE001
+            text = ""
+    if not text:
+        try:
+            text = raw.decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            text = ""
     db = SessionLocal()
     try:
         doc = Document(title=file.filename or "Dokument", content=text[:200000],
@@ -1812,6 +1845,32 @@ def delete_knowledge(doc_id: int):
 def knowledge_search(q: str):
     from . import knowledge
     return {"results": knowledge.search(q)}
+
+
+@app.get("/api/vault")
+def vault_list():
+    from . import vault
+    return {"enabled": vault.enabled(), "notes": vault.list_notes()}
+
+
+@app.get("/api/vault/note")
+def vault_note(name: str):
+    from . import vault
+    return {"name": name, "content": vault.read_note(name)}
+
+
+class NoteIn(BaseModel):
+    title: str
+    content: str = ""
+
+
+@app.post("/api/vault/note")
+def vault_write(n: NoteIn):
+    from . import vault
+    if not vault.enabled():
+        raise HTTPException(400, "Keine Obsidian-Vault konfiguriert (OBSIDIAN_VAULT).")
+    rel = vault.write_note(n.title, n.content)
+    return {"ok": True, "name": rel}
 
 
 @app.get("/api/budget/history")
@@ -1862,6 +1921,42 @@ def backup_export(request: Request):
         return data
     finally:
         db.close()
+
+
+@app.get("/api/backup/full")
+def backup_full(request: Request):
+    """Vollständiges Backup als ZIP: DB-Snapshot (JSON) + Workspaces + Vault."""
+    import json as _json
+    import tempfile
+    import zipfile
+    from .models import Project as P, Document
+    t = context.tid()
+    snapshot = backup_export(request)  # JSON-Snapshot (gefiltert nach Tenant)
+    db = SessionLocal()
+    try:
+        project_ids = [p.id for p in db.query(P).filter(P.tenant_id == t).all()]
+    finally:
+        db.close()
+    fd, path = tempfile.mkstemp(suffix=".zip", prefix=f"backup_tenant_{t}_")
+    os.close(fd)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("snapshot.json", _json.dumps(snapshot, default=str, ensure_ascii=False, indent=2))
+        # Workspaces der Projekte + shared
+        for pid in project_ids + ["shared"]:
+            root = os.path.join(config.WORKSPACE_DIR, f"project_{pid}")
+            if os.path.isdir(root):
+                for base, _d, files in os.walk(root):
+                    for fn in files:
+                        full = os.path.join(base, fn)
+                        z.write(full, "workspace/" + os.path.relpath(full, config.WORKSPACE_DIR))
+        # Vault-Notizen der Firma
+        vroot = os.path.join(config.OBSIDIAN_VAULT, "AI-Hub", f"tenant_{t}")
+        if os.path.isdir(vroot):
+            for base, _d, files in os.walk(vroot):
+                for fn in files:
+                    full = os.path.join(base, fn)
+                    z.write(full, "vault/" + os.path.relpath(full, vroot))
+    return FileResponse(path, filename=f"ai-hub-backup-tenant-{t}.zip", media_type="application/zip")
 
 
 class ConfigImport(BaseModel):

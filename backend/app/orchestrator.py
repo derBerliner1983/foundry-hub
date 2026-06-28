@@ -390,6 +390,11 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
                          recipient_kind="agent", recipient_agent_id=agent.id,
                          subject="GitHub", body=str(res.get("url") or res.get("error")), project_id=pctx)
 
+        elif atype == "write_note":
+            from . import vault
+            rel = vault.write_note(act.get("title", "Notiz"), act.get("content", ""))
+            log(db, "info", f"Notiz in der Vault gespeichert: {rel or '(Vault aus)'}", agent_id=agent.id)
+
         elif atype == "search_memory":
             from . import knowledge
             res = knowledge.search_text(act.get("query", ""))

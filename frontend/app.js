@@ -403,16 +403,26 @@ window.openAgent = async function (id) {
 // ---------- Tasks ----------
 async function renderTasks() {
   const tasks = await api.get("/api/tasks");
-  const groups = { todo: [], in_progress: [], done: [], failed: [] };
+  const cols = { todo: "Offen", in_progress: "In Arbeit", review: "Review", done: "Erledigt" };
+  const groups = {}; Object.keys(cols).forEach(k => groups[k] = []);
   tasks.forEach(t => (groups[t.status] || (groups[t.status] = [])).push(t));
-  const labels = { todo: "Offen", in_progress: "In Arbeit", done: "Erledigt", failed: "Fehlgeschlagen" };
-  root.innerHTML = Object.keys(labels).map(k => `
-    <div class="panel">
-      <div class="panel-head"><i data-lucide="circle-dot"></i> <b>${labels[k]}</b> <span class="tag">${(groups[k] || []).length}</span><i data-lucide="chevron-down" class="chev"></i></div>
-      <div class="panel-body">${(groups[k] || []).length ? (groups[k]).map(t => `<div class="msg"><div class="subject">#${t.id} ${esc(t.title)}</div><div class="body">${esc(t.description)}</div>${t.result ? `<div class="tag" style="margin-top:6px">Ergebnis</div><div class="body">${esc(t.result)}</div>` : ""}</div>`).join("") : `<div class="muted">keine</div>`}</div>
-    </div>`).join("");
-  icons(); setupCollapse();
+  root.innerHTML = `<div class="tag" style="margin-bottom:10px">Karten per Drag & Drop zwischen den Spalten verschieben.</div>
+    <div class="kanban">${Object.keys(cols).map(k => `
+      <div class="kcol" data-status="${k}" ondragover="event.preventDefault()" ondrop="dropTask(event,'${k}')">
+        <div class="kcol-head">${cols[k]} <span class="tag">${(groups[k] || []).length}</span></div>
+        ${(groups[k] || []).map(t => `<div class="kcard" draggable="true" ondragstart="event.dataTransfer.setData('id','${t.id}')">
+          <b>#${t.id} ${esc(t.title)}</b>
+          <div class="muted" style="font-size:12px">${esc((t.description || '').slice(0, 90))}</div>
+          ${t.result ? `<div class="tag" style="margin-top:4px">${esc(t.result.slice(0, 80))}</div>` : ''}</div>`).join("")}
+      </div>`).join("")}</div>`;
+  icons();
 }
+window.dropTask = async (e, status) => {
+  e.preventDefault();
+  const id = e.dataTransfer.getData("id"); if (!id) return;
+  await api.put("/api/tasks/" + id, { status });
+  renderTasks();
+};
 
 // ---------- Werkstatt ----------
 async function renderWorkshop() {
@@ -684,7 +694,20 @@ window.msDue = async (id, val) => { await api.put("/api/milestones/" + id, { due
 // ---------- Wissensspeicher ----------
 async function renderKnowledge() {
   const docs = await api.get("/api/knowledge");
+  const vault = await api.get("/api/vault");
   root.innerHTML = `
+    <div class="card" style="margin-bottom:14px"><h3><i data-lucide="notebook-pen"></i> Obsidian-Vault (Gehirn)
+      <span class="pill ${vault.enabled ? 'employed' : 'resigned'}">${vault.enabled ? 'aktiv' : 'aus'}</span></h3>
+      ${vault.enabled ? `
+        <div class="row"><input id="vn-title" placeholder="Notiz-Titel" style="margin:0"/>
+          <button class="btn sm" id="vn-add" style="white-space:nowrap"><i data-lucide="plus"></i> Notiz</button></div>
+        <textarea id="vn-content" placeholder="Markdown-Inhalt … [[Verlinkungen]] erlaubt"></textarea>
+        <div class="stat-label" style="margin-top:6px">Notizen (${vault.notes.length})</div>
+        ${vault.notes.length ? vault.notes.map(n => `<div class="agent-row" style="padding:7px 11px;cursor:pointer" onclick="viewNote('${encodeURIComponent(n.name)}')">
+          <i data-lucide="file-text" style="width:15px"></i><div class="info"><b style="font-size:13px">${esc(n.name)}</b></div></div>`).join("") : `<div class="muted">noch keine</div>`}
+        <pre id="vn-view" style="white-space:pre-wrap;max-height:200px;overflow:auto;color:var(--text-dim);margin-top:8px"></pre>
+      ` : `<div class="tag">Setze <code>OBSIDIAN_VAULT</code> und hänge deinen Vault-Ordner im Compose ein (<code>- /pfad/Vault:/data/vault</code>). Dann schreiben Agenten Notizen hierher und durchsuchen sie.</div>`}
+    </div>
     <div class="card" style="margin-bottom:14px"><h3><i data-lucide="brain"></i> Wissen hinzufügen</h3>
       <input id="kn-title" placeholder="Titel (z. B. Markenrichtlinie, API-Doku)"/>
       <textarea id="kn-content" placeholder="Inhalt/Notiz, den die Agenten durchsuchen können …"></textarea>
@@ -712,6 +735,12 @@ async function renderKnowledge() {
     await api.post("/api/knowledge", { title: t, content: document.getElementById("kn-content").value });
     renderKnowledge();
   };
+  const vnAdd = document.getElementById("vn-add");
+  if (vnAdd) vnAdd.onclick = async () => {
+    const t = document.getElementById("vn-title").value.trim(); if (!t) return;
+    await api.post("/api/vault/note", { title: t, content: document.getElementById("vn-content").value });
+    renderKnowledge();
+  };
   document.getElementById("kn-reindex").onclick = async () => {
     document.getElementById("kn-idxstatus").textContent = "indexiere …";
     const r = await api.post("/api/knowledge/reindex");
@@ -733,6 +762,10 @@ window.knSearch = async () => {
   el.innerHTML = r.results.length ? r.results.map(h => `<div class="msg from-agent"><div class="subject">${esc(h.source)}</div><div class="body">${esc(h.snippet)}</div></div>`).join("") : `<div class="muted">Keine Treffer.</div>`;
 };
 window.delDoc = async (id) => { await fetch("/api/knowledge/" + id, { method: "DELETE" }); renderKnowledge(); };
+window.viewNote = async (name) => {
+  const r = await api.get("/api/vault/note?name=" + name);
+  document.getElementById("vn-view").textContent = r.content || "(leer)";
+};
 
 // ---------- Cookbook / Regelwerk ----------
 async function renderCookbook() {
@@ -896,10 +929,11 @@ async function renderSettings() {
         <button class="btn sm" id="rec-add" style="white-space:nowrap"><i data-lucide="plus"></i> anlegen</button></div>
     </div>
     <div class="card" style="margin-bottom:14px"><h3><i data-lucide="archive"></i> Sicherung (Backup)</h3>
-      <div class="row"><button class="btn ghost" id="bk-export"><i data-lucide="download"></i> Firma exportieren (JSON)</button>
+      <div class="row" style="flex-wrap:wrap"><button class="btn" id="bk-full"><i data-lucide="archive"></i> Vollständiges Backup (ZIP)</button>
+        <button class="btn ghost" id="bk-export"><i data-lucide="download"></i> Snapshot (JSON)</button>
         <button class="btn ghost" id="bk-import"><i data-lucide="upload"></i> Regeln/Skills/MCP importieren</button>
         <input type="file" id="bk-file" class="hidden" accept="application/json"/></div>
-      <div class="tag" style="margin-top:8px">Export ist ein vollständiger JSON-Snapshot. Import übernimmt Regeln, Skills und MCP-Server aus einem Export.</div>
+      <div class="tag" style="margin-top:8px">Vollständiges Backup enthält DB-Snapshot, alle Projekt-Workspaces und die Vault-Notizen. Der JSON-Snapshot/Import deckt die Konfiguration (Regeln/Skills/MCP) ab.</div>
     </div>
     <div class="card" style="margin-bottom:14px"><h3><i data-lucide="clock"></i> Zeitplan – wann die KI prüft & beobachtet</h3>
       <div class="grid cols-2" style="gap:10px">
@@ -1053,6 +1087,7 @@ async function renderSettings() {
     renderSettings();
   };
   // Backup
+  document.getElementById("bk-full").onclick = () => window.open("/api/backup/full", "_blank");
   document.getElementById("bk-export").onclick = () => window.open("/api/backup/export", "_blank");
   document.getElementById("bk-import").onclick = () => document.getElementById("bk-file").click();
   document.getElementById("bk-file").onchange = async (e) => {
