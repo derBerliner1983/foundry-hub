@@ -55,6 +55,9 @@ class Config:
     # Optional: Brave Search API-Key für den Such-MCP-Server (sonst DuckDuckGo)
     BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
 
+    # Obsidian-Vault als Wissensspeicher/Gehirn (Ordner mit .md). Leer = aus.
+    OBSIDIAN_VAULT = os.getenv("OBSIDIAN_VAULT", "/data/vault")
+
     # E-Mail senden (SMTP)
     SMTP_HOST = os.getenv("SMTP_HOST", "")
     SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))

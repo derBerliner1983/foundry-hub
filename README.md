@@ -338,6 +338,26 @@ pausiert). Der Hauptschalter *Agenten laufen automatisch* pausiert alles.
 - **Backup** – vollständiger JSON-Export der Firma; Import von Regeln/Skills/
   MCP-Servern aus einem Export.
 
+### Obsidian-Vault als „Gehirn"
+
+AI-Hub kann eine **Obsidian-Vault** (Ordner mit Markdown-Dateien) als gemeinsames
+Wissen nutzen: Agenten schreiben Erkenntnisse als Notiz (`write_note`), du siehst
+und bearbeitest sie direkt in **Obsidian**, und die Wissenssuche durchsucht die
+Vault mit. Pro Firma ein Unterordner unter `<Vault>/AI-Hub/tenant_<id>/`, damit es
+mit einer bestehenden Vault koexistiert.
+
+Eigene Vault einhängen (in `docker-compose.yml`):
+
+```yaml
+    volumes:
+      - /pfad/zu/deinem/Obsidian-Vault:/data/vault
+```
+
+### Kanban & Aufgaben
+
+Die **Aufgaben**-Ansicht ist ein **Kanban-Board** (Offen · In Arbeit · Review ·
+Erledigt) – Karten per **Drag & Drop** zwischen den Spalten verschieben.
+
 ### Wissensspeicher & Audit
 
 - **Wissensspeicher (Vektor-RAG)** – unter *Wissen* legst du Notizen ab oder lädst
@@ -378,7 +398,7 @@ höheres Limit hebt die Pause wieder auf. Eine Kosten-Kachel steht im Dashboard.
 | Schicht | Technik |
 |--------|---------|
 | Backend / API | FastAPI (Python) + Hintergrund-Orchestrator (Runden-Engine) |
-| Datenbank | SQLite (Docker-Volume `aihub-data`) |
+| Datenbank | SQLite (Standard) – oder **PostgreSQL** via `DATABASE_URL` |
 | LLM-Provider | Claude · OpenAI · Ollama · Mock (austauschbar, reines REST) |
 | Frontend | Vanilla JS + eigenes Design-System (Dark-Dashboard, lucide-Icons) |
 | Betrieb | Docker Compose (App + Ollama) |
@@ -473,6 +493,12 @@ Viele Werte lassen sich auch **live in der UI** unter *Einstellungen* ändern.
 
 - **Persistenz**: Datenbank und Workspaces liegen im Docker-Volume `aihub-data`
   und überstehen Neustarts.
+- **PostgreSQL** (für mehr Last/mehrere Nutzer): einen Postgres-Container starten
+  und `DATABASE_URL=postgresql+psycopg://user:pass@host:5432/aihub` setzen – der
+  Treiber ist enthalten, SQLAlchemy nutzt ihn automatisch.
+- **Vollständiges Backup**: *Einstellungen → Sicherung → „Vollständiges Backup
+  (ZIP)"* lädt DB-Snapshot + alle Projekt-Workspaces + Vault-Notizen.
+- **PDF als Wissen**: hochgeladene PDFs werden ausgelesen (Text) und durchsuchbar.
 - **Kosten**: Echte Cloud-Modelle verursachen Token-Kosten. Über die
   Autonomie-Stufe, Freigaben und das Befehlslimit behältst du die Kontrolle; mit
   dem Schalter *Agenten laufen automatisch* lässt sich der Betrieb pausieren.
