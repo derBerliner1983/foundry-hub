@@ -94,13 +94,17 @@ die passende Ansicht.
 ### Daily-Assistent & E-Mail
 
 Getrennt von der Projekt-Firma gibt es einen **persönlichen Daily-Assistenten**
-für die tägliche Arbeit:
+für die tägliche Arbeit – er nimmt dir Dinge ab und **delegiert Projektarbeit an
+die Firma**:
 
 - **E-Mails lesen & zusammenfassen** – mit deiner Erlaubnis (Schalter „Daily-
   Assistent darf meine E-Mails lesen") liest er per **IMAP** deinen Posteingang
   und fasst ihn auf Knopfdruck zusammen (Absender, Kernaussage, empfohlene Aktion).
-- **Chatten** – frag ihn etwas; bei aktivem Zugang nimmt er die aktuellen E-Mails
-  als Kontext (z. B. „Entwirf eine Antwort an …").
+- **Chatten & abnehmen** – frag ihn etwas; bei aktivem Zugang nimmt er die
+  aktuellen E-Mails als Kontext (z. B. „Entwirf eine Antwort an …").
+- **An die Firma delegieren** – größere Vorhaben legt er als **Projekt** an,
+  kleine Sachen als **Einzelaufgabe** – automatisch beim Chef. So machst du nur
+  ihm gegenüber „auf", und die Firma übernimmt die Umsetzung.
 - **E-Mail senden** – per **SMTP** direkt aus der App.
 
 **E-Mail-Benachrichtigungen:** Optional schickt dir AI-Hub eine E-Mail bei
@@ -131,8 +135,22 @@ Befehle haben ein **Timeout** (`EXEC_TIMEOUT`) und ein **Limit pro Aufgabe**
 (`MAX_EXEC_PER_TASK`). Die Werkstatt lässt sich komplett abschalten
 (`ENABLE_CODE_EXECUTION` bzw. Schalter in den Einstellungen).
 
-> ⚠️ Die Sandbox läuft im App-Container. Für echten Produktivbetrieb sollte ein
-> isolierter Runner-Container ohne Zugriff auf sensible Daten verwendet werden.
+**Isolierter Build-Container.** Per `docker compose` läuft ein eigener
+**`sandbox`**-Container (getrennt vom App-Container, ohne DB-Zugriff), in dem die
+Agenten **echt installieren und bauen**:
+
+- **Software isoliert installieren** (`pip`/`npm`/`apt`) und per `reset_workspace`
+  wieder entfernen – ohne den App-Container zu verändern.
+- **Echte Builds** ausführen (z. B. Python-EXE via PyInstaller, Node-Builds,
+  Linux-Binaries; Android-APK mit ergänztem Android-SDK). Die **echten
+  Fehlermeldungen** kommen zurück, sodass die KI ihre Fehler **selbst findet und
+  behebt** (Schreiben → Bauen → Fehler lesen → Korrigieren).
+- Status & „Workspace leeren" in der **Werkstatt**-Ansicht.
+
+> **Was geht / was nicht:** Linux-/Windows-/Android-Artefakte sind machbar.
+> **Apple-Apps (.ipa/.app) brauchen macOS + Xcode** und sind in einem
+> Linux-Container **nicht** baubar – dafür wäre ein macOS-Build-Runner nötig.
+> Ohne `SANDBOX_URL` laufen Befehle lokal im App-Container (weniger isoliert).
 
 ### Cookbook / Regelwerk (Standards)
 
@@ -150,11 +168,13 @@ bearbeiten, aktiv/inaktiv schalten oder löschen.
 - **Skills** – wiederverwendbare Fähigkeiten als Anweisungs-/Befehlsvorlage.
   Agenten nutzen sie mit `use_skill`; hat ein Skill einen Befehl (`{args}` wird
   ersetzt), wird er im Workspace ausgeführt, sonst dient er als Vorgehens-Vorlage.
-- **MCP-Server (echter Client)** – externe MCP-Server eintragen (stdio/http).
-  Per **Verbinden** lädt AI-Hub die echte Tool-Liste (JSON-RPC `tools/list`) und
-  zeigt sie an. Agenten rufen Tools dann wirklich auf (Aktion `mcp_call` →
-  `tools/call`); das Ergebnis kommt als Nachricht zurück. Die verfügbaren Tools
-  stehen automatisch im System-Prompt der Agenten.
+- **MCP-Server (echter Client, dauerhafte Sitzungen)** – externe MCP-Server
+  eintragen (stdio/http). Per **Verbinden** lädt AI-Hub die echte Tool-Liste
+  (JSON-RPC `tools/list`). Agenten rufen Tools wirklich auf (Aktion `mcp_call` →
+  `tools/call`); das Ergebnis kommt als Nachricht zurück. Verbindungen werden in
+  einem **Session-Pool dauerhaft gehalten** und wiederverwendet (nur einmal
+  `initialize`) – stirbt ein Prozess oder bricht die Sitzung ab, wird einmalig
+  neu verbunden. So „meckern" Server nicht über ständig neue Sitzungen.
 
   **Vorkonfiguriert & sofort nutzbar** – drei eigene Python-MCP-Server (laufen
   ohne Node/npx) werden beim Start automatisch verbunden:
@@ -265,13 +285,20 @@ Kontext (Rolle, Team, Nachrichten, Aufgaben, **geltende Regeln**, verfügbare
 | `hire` / `fire` / `resign` | Mitarbeiter einstellen/kündigen (ggf. mit Freigabe) |
 | `create_task` / `complete_task` | Aufgabe anlegen/abschließen |
 | `rate` | Leistung eines Mitarbeiters bewerten (1–5) |
-| `write_file` / `read_file` / `run_command` | Code-Werkstatt (echte Dateien & Ausführung) |
+| `write_file` / `read_file` / `run_command` | Code-Werkstatt (echte Dateien, Installation & Builds im Sandbox-Container) |
+| `reset_workspace` | installierte Software/Builds wieder entfernen |
 | `add_rule` | Standard/Regel im Cookbook anlegen |
 | `use_skill` | Skill nutzen (Befehl ausführen oder Vorgehen anwenden) |
 | `mcp_call` | Echtes MCP-Tool eines verbundenen Servers aufrufen |
 
 So entsteht die Zusammenarbeit. Ergebnisse von Fachkräften sind Text-Artefakte
 (Konzept, Plan) **oder** echte Dateien im Workspace (Code), je nach Aufgabe.
+
+**Selbstüberwachung (Loop-Stopp):** Wiederholt ein Agent mehrfach hintereinander
+exakt dieselbe Aktion, erkennt das System die **Endlosschleife automatisch**,
+**stoppt** den Agenten, informiert seinen Vorgesetzten bzw. dich und markiert ihn
+in *Team/Org* mit „⚠️ Schleife". Per **Fortsetzen** (oder einer Nachricht an den
+Agenten) läuft er weiter – so verbrennt eine festhängende KI keine Endlos-Runden.
 
 ## Konfiguration (.env)
 
@@ -293,6 +320,7 @@ So entsteht die Zusammenarbeit. Ergebnisse von Fachkräften sind Text-Artefakte
 | `EXEC_TIMEOUT` | `60` | Timeout pro Befehl (Sekunden) |
 | `MAX_EXEC_PER_TASK` | `10` | Befehlslimit pro Aufgabe |
 | `WORKSPACE_DIR` | `/data/workspace` | Wurzel der Projekt-Workspaces |
+| `SANDBOX_URL` | `http://sandbox:8800` | Isolierter Build-Container (leer = lokal im App-Container) |
 | `TICK_INTERVAL_SECONDS` | `4` | Takt des Orchestrators |
 | `MAX_AGENTS` | `25` | Maximale Mitarbeiterzahl |
 
@@ -306,6 +334,7 @@ Viele Werte lassen sich auch **live in der UI** unter *Einstellungen* ändern.
   Autonomie-Stufe, Freigaben und das Befehlslimit behältst du die Kontrolle; mit
   dem Schalter *Agenten laufen automatisch* lässt sich der Betrieb pausieren.
 - **Sandbox-Isolation**: siehe Hinweis bei der Code-Werkstatt.
-- **MCP**: Der Client baut pro Aufruf eine kurze Sitzung auf (initialize →
-  tools/list bzw. tools/call). Das ist robust; für sehr häufige Aufrufe wäre eine
-  langlebige Sitzung der nächste Optimierungsschritt.
+- **MCP**: Verbindungen werden in einem Session-Pool **dauerhaft** gehalten und
+  wiederverwendet; bei Abbruch wird automatisch neu verbunden.
+- **Builds**: Für Apple-Apps ist ein macOS-Build-Runner nötig (nicht im
+  Linux-Container). Für echte APK-Builds das Android-SDK im `sandbox`-Image ergänzen.

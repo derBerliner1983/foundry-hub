@@ -288,6 +288,11 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
         elif atype == "run_command":
             _do_run_command(db, agent, settings, act, current_task, pctx)
 
+        elif atype == "reset_workspace":
+            res = workspace.reset_workspace(pctx, act.get("path", ""))
+            log(db, "exec", f"Workspace zurückgesetzt ({'ok' if res.get('ok') else res.get('stderr','Fehler')})",
+                agent_id=agent.id)
+
         elif atype == "read_file":
             content = workspace.read_file(pctx, act.get("path", ""))
             log(db, "file", f"Datei gelesen: {act.get('path','')} ({len(content)} Z.)", agent_id=agent.id)
@@ -615,17 +620,16 @@ def _maybe_auto_fire(db, agent, settings, ratee_id):
 def _next_agent_to_act(db):
     """Wählt einen beschäftigten Agenten mit offener Arbeit (Nachricht oder Aufgabe)."""
     # Agenten mit ungelesener Nachricht
-    sub = (
-        db.query(Message.recipient_agent_id)
-        .filter(Message.recipient_kind == "agent", Message.is_read == False)  # noqa: E712
-        .subquery()
-    )
+    ids = [r[0] for r in db.query(Message.recipient_agent_id)
+           .filter(Message.recipient_kind == "agent", Message.is_read == False)  # noqa: E712
+           .distinct() if r[0] is not None]
     agent = (
         db.query(Agent)
-        .filter(Agent.status == "employed", Agent.id.in_(sub))
+        .filter(Agent.status == "employed", Agent.stuck == False,  # noqa: E712
+                Agent.id.in_(ids))
         .order_by(Agent.id)
         .first()
-    )
+    ) if ids else None
     if agent:
         return agent
     # Agenten mit offener Aufgabe
@@ -637,7 +641,7 @@ def _next_agent_to_act(db):
     )
     if task:
         a = db.get(Agent, task.assigned_agent_id)
-        if a and a.status == "employed":
+        if a and a.status == "employed" and not a.stuck:
             return a
     return None
 
@@ -707,8 +711,43 @@ async def run_agent_turn(db, agent: Agent):
                     actions_summary=summary[:2000],
                     trigger=" | ".join(context_lines)[:1000]))
     db.commit()
+    _check_loop(db, agent)
     return {"agent": agent.name, "provider": result.provider,
             "thoughts": parsed.get("thoughts", ""), "actions": parsed.get("actions", [])}
+
+
+LOOP_THRESHOLD = 3  # so oft dieselbe Aktion hintereinander = Schleife
+
+
+def _check_loop(db, agent: Agent):
+    """Erkennt, wenn ein Agent immer wieder dasselbe tut, und stoppt ihn."""
+    recent = (db.query(Decision)
+              .filter(Decision.agent_id == agent.id)
+              .order_by(Decision.id.desc())
+              .limit(LOOP_THRESHOLD).all())
+    if len(recent) < LOOP_THRESHOLD:
+        return
+    sigs = {(r.actions_summary or "").strip() for r in recent}
+    if len(sigs) == 1:  # alle identisch -> Schleife
+        agent.stuck = True
+        log(db, "loop", f"{agent.name} hängt in einer Schleife "
+            f"('{recent[0].actions_summary[:60]}') – automatisch gestoppt.", agent_id=agent.id)
+        # Vorgesetzten bzw. Nutzer informieren
+        if agent.manager_id:
+            send_message(db, sender_kind="system", sender_agent_id=None,
+                         recipient_kind="agent", recipient_agent_id=agent.manager_id,
+                         subject=f"⚠️ {agent.name} steckt fest",
+                         body=f"{agent.name} wiederholt dieselbe Aktion und wurde gestoppt. "
+                              f"Bitte Aufgabe klären, neu zuweisen oder ersetzen.",
+                         project_id=agent.project_id)
+        else:
+            send_message(db, sender_kind="system", sender_agent_id=None,
+                         recipient_kind="user", recipient_agent_id=None,
+                         subject=f"⚠️ {agent.name} steckt in einer Schleife",
+                         body="Der Agent wurde automatisch gestoppt. Du kannst ihn nach einer "
+                              "Klärung wieder fortsetzen.", requires_answer=True)
+            maybe_notify(db, "question", f"{agent.name} steckt fest", "Automatisch gestoppt.")
+        db.commit()
 
 
 def _summarize_actions(actions) -> str:

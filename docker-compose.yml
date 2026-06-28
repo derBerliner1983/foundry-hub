@@ -33,10 +33,25 @@ services:
       - ENABLE_CODE_EXECUTION=${ENABLE_CODE_EXECUTION:-true}
       - EXEC_TIMEOUT=${EXEC_TIMEOUT:-60}
       - WORKSPACE_DIR=/data/workspace
+      - SANDBOX_URL=${SANDBOX_URL:-http://sandbox:8800}
     volumes:
       - aihub-data:/data
     depends_on:
       - ollama
+      - sandbox
+    restart: unless-stopped
+
+  # Isolierter Build-Container: hier installieren/bauen die Agenten (getrennt
+  # vom App-Container). Teilt sich das Workspace-Volume mit der App.
+  sandbox:
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile
+    container_name: aihub-sandbox
+    environment:
+      - WORKSPACE_DIR=/data/workspace
+    volumes:
+      - aihub-data:/data
     restart: unless-stopped
 
   # Lokale Modelle (optional). Modelle vorher ziehen, z. B.:

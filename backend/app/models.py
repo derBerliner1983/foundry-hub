@@ -76,6 +76,7 @@ class Agent(Base):
     manager_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
     note = Column(Text, default="")
+    stuck = Column(Boolean, default=False)   # in Endlosschleife erkannt -> pausiert
     created_at = Column(DateTime, default=now)
 
     manager = relationship("Agent", remote_side=[id], backref="reports")

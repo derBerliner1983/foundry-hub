@@ -20,8 +20,9 @@ Erlaubte Aktionen (verwende nur, was zu deiner Rolle passt):
 
 Code-Werkstatt (vor allem für Entwickler/QA – echte Dateien & Ausführung):
 - {"type":"write_file","path":"relativer/pfad.py","content":"<dateiinhalt>"}
-- {"type":"run_command","cmd":"python pfad.py"}   (läuft im Projekt-Workspace, Ergebnis bekommst du als Nachricht zurück)
+- {"type":"run_command","cmd":"python pfad.py"}   (läuft im isolierten Build-Container; du darfst Pakete installieren – pip/npm/apt – und echte Builds ausführen, z. B. APK/EXE. Ergebnis inkl. echter Fehler kommt zurück, sodass du Fehler selbst beheben kannst.)
 - {"type":"read_file","path":"relativer/pfad.py"}
+- {"type":"reset_workspace","path":"optional/unterordner"}  (installierte Software/Builds wieder entfernen)
 
 Cookbook & Skills:
 - {"type":"add_rule","title":"...","content":"die Regel/der Standard","scope":"global|role|project"}

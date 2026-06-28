@@ -115,6 +115,7 @@ def agent_dict(db, a: Agent):
         "id": a.id, "name": a.name, "role": a.role, "title": role_title(a.role),
         "provider": a.provider, "model": a.model, "status": a.status,
         "manager_id": a.manager_id, "project_id": a.project_id,
+        "stuck": a.stuck,
         "rating": orch.avg_rating(db, a.id),
         "rating_count": db.query(Rating).filter(Rating.ratee_agent_id == a.id).count(),
     }
@@ -358,6 +359,11 @@ def post_message(m: UserMessage):
             target_id = m.to_agent_id
         if not target_id:
             raise HTTPException(404, "Kein Empfänger")
+        # Eine Nachricht des Nutzers weckt einen festsitzenden Agenten wieder
+        ta = db.get(Agent, target_id)
+        if ta and ta.stuck:
+            ta.stuck = False
+            orch.log(db, "info", f"{ta.name} durch Nutzer fortgesetzt", agent_id=ta.id)
         # offene Rückfragen an diesen Agenten als beantwortet markieren
         for q in db.query(Message).filter(
                 Message.sender_agent_id == target_id,
@@ -388,6 +394,22 @@ def list_messages(agent_id: int | None = None, inbox: str | None = None):
             )
         msgs = q.order_by(Message.created_at.desc()).limit(200).all()
         return [msg_dict(db, m) for m in reversed(msgs)]
+    finally:
+        db.close()
+
+
+@app.post("/api/agents/{agent_id}/resume")
+def resume_agent(agent_id: int):
+    """Setzt einen automatisch gestoppten (festsitzenden) Agenten fort."""
+    db = SessionLocal()
+    try:
+        a = db.get(Agent, agent_id)
+        if not a:
+            raise HTTPException(404, "Agent nicht gefunden")
+        a.stuck = False
+        orch.log(db, "info", f"{a.name} fortgesetzt", agent_id=a.id)
+        db.commit()
+        return {"ok": True}
     finally:
         db.close()
 
@@ -720,6 +742,26 @@ def workspace_file(path: str, project_id: int | None = None):
     return {"path": path, "content": workspace.read_file(project_id, path)}
 
 
+@app.get("/api/sandbox/status")
+def sandbox_status():
+    """Status des isolierten Build-Containers (Werkzeuge)."""
+    if not config.SANDBOX_URL:
+        return {"enabled": False, "reachable": False,
+                "note": "Läuft lokal im App-Container (kein isolierter Build-Container konfiguriert)."}
+    try:
+        import httpx
+        r = httpx.get(f"{config.SANDBOX_URL}/health", timeout=8)
+        d = r.json()
+        return {"enabled": True, "reachable": True, "tools": d.get("tools", {})}
+    except Exception as e:  # noqa: BLE001
+        return {"enabled": True, "reachable": False, "error": str(e)}
+
+
+@app.post("/api/sandbox/reset")
+def sandbox_reset(project_id: int | None = None):
+    return workspace.reset_workspace(project_id)
+
+
 @app.get("/api/console")
 def console(project_id: int | None = None):
     """Letzte Befehlsausführungen (aus dem Event-Log)."""
@@ -958,13 +1000,15 @@ def create_mcp(m: McpIn):
 
 
 @app.delete("/api/mcp/{mcp_id}")
-def delete_mcp(mcp_id: int):
+async def delete_mcp(mcp_id: int):
     db = SessionLocal()
     try:
         m = db.get(McpServer, mcp_id)
         if m:
+            transport, command, url = m.transport, m.command, m.url
             db.delete(m)
             db.commit()
+            await mcp_client.close_session(transport, command, url)
         return {"ok": True}
     finally:
         db.close()

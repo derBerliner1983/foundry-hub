@@ -42,6 +42,10 @@ class Config:
     ENABLE_CODE_EXECUTION = _bool("ENABLE_CODE_EXECUTION", True)
     EXEC_TIMEOUT = int(os.getenv("EXEC_TIMEOUT", "60"))
     MAX_EXEC_PER_TASK = int(os.getenv("MAX_EXEC_PER_TASK", "10"))
+    # Isolierter Build-/Sandbox-Container: wenn gesetzt, laufen Befehle dort
+    # (echte, isolierte Installation & Builds), statt im App-Container.
+    SANDBOX_URL = os.getenv("SANDBOX_URL", "")
+    SANDBOX_TIMEOUT = int(os.getenv("SANDBOX_TIMEOUT", "600"))
 
     # Ollama: Standardmodell, das beim Start NUR gezogen wird, wenn noch
     # gar kein Modell installiert ist. Leer = nie automatisch ziehen.

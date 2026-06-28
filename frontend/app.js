@@ -215,7 +215,9 @@ window.asSend = async () => {
   assistChat.push({ role: "user", text: msg }); inp.value = ""; renderChat();
   assistChat.push({ role: "assistant", text: "…" }); renderChat();
   const r = await api.post("/api/assistant/chat", { message: msg });
-  assistChat[assistChat.length - 1] = { role: "assistant", text: r.reply || r.error || "(keine Antwort)" };
+  let text = r.reply || r.error || "(keine Antwort)";
+  if (r.done && r.done.length) text += "\n\n✅ " + r.done.join("\n✅ ");
+  assistChat[assistChat.length - 1] = { role: "assistant", text };
   renderChat();
 };
 
@@ -313,6 +315,7 @@ async function renderOrg() {
       <div class="avatar role-${a.role}">${initials(a.name)}</div>
       <div class="info"><b>${esc(a.name)}</b><small>${esc(a.title)} · ${esc(a.provider)}/${esc(a.model)}</small></div>
       <div class="donut" style="--p:${p}"><span>${r ?? "–"}</span></div>
+      ${a.stuck ? `<span class="pill fired">⚠️ Schleife</span><button class="btn green sm" onclick="resumeAgent(${a.id})"><i data-lucide="play"></i> fortsetzen</button>` : ''}
       <span class="pill ${a.status}">${a.status}</span>
       <button class="btn ghost sm" onclick="openAgent(${a.id})"><i data-lucide="star"></i> bewerten</button>
     </div>` + (byManager[a.id] || []).map(c => row(c, depth + 1)).join("");
@@ -323,6 +326,7 @@ async function renderOrg() {
   icons();
 }
 
+window.resumeAgent = async (id) => { await api.post(`/api/agents/${id}/resume`); renderOrg(); };
 window.openAgent = async function (id) {
   const a = await api.get("/api/agents/" + id);
   const d = document.getElementById("agent-detail");
@@ -375,6 +379,8 @@ async function renderWorkshop() {
     <div class="card" style="margin-bottom:14px">
       <div class="row"><h3 style="margin:0"><i data-lucide="folder-code"></i> Projekt-Workspace</h3>
         <div class="spacer" style="flex:1"></div>
+        <span id="ws-sandbox" class="tag">Sandbox …</span>
+        <button class="btn ghost sm" id="ws-reset"><i data-lucide="trash-2"></i> Workspace leeren</button>
         <select id="ws-proj" style="width:auto;margin:0">${opts || '<option>kein Projekt</option>'}</select></div>
     </div>
     <div class="grid cols-2">
@@ -387,6 +393,17 @@ async function renderWorkshop() {
     </div>`;
   icons(); setupCollapse();
   document.getElementById("ws-proj").onchange = e => { wsProject = e.target.value; loadWorkshop(); };
+  document.getElementById("ws-reset").onclick = async () => {
+    if (!confirm("Workspace dieses Projekts leeren (Dateien & Builds löschen)?")) return;
+    await api.post("/api/sandbox/reset?project_id=" + (wsProject || ""));
+    loadWorkshop();
+  };
+  api.get("/api/sandbox/status").then(st => {
+    const el = document.getElementById("ws-sandbox"); if (!el) return;
+    if (st.enabled && st.reachable) el.innerHTML = `<span style="color:var(--green)">● Build-Container aktiv</span>`;
+    else if (st.enabled) el.innerHTML = `<span style="color:var(--red)">● Sandbox offline</span>`;
+    else el.textContent = "lokal (kein Build-Container)";
+  });
   loadWorkshop();
 }
 

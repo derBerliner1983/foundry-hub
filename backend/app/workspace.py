@@ -1,7 +1,13 @@
 """Datei-Werkstatt: pro Projekt ein Arbeitsverzeichnis, in das Agenten
-echte Dateien schreiben und in dem sie Befehle (Sandbox) ausführen können."""
+echte Dateien schreiben und in dem sie Befehle (Sandbox) ausführen können.
+
+Ist SANDBOX_URL gesetzt, laufen Befehle im isolierten Build-Container, sonst
+lokal im App-Container."""
 import os
+import shutil
 import subprocess
+
+import httpx
 
 from .config import config
 
@@ -53,10 +59,29 @@ def list_files(project_id) -> list:
     return sorted(out, key=lambda x: x["path"])
 
 
+def _project_rel(project_id) -> str:
+    pid = project_id if project_id is not None else "shared"
+    return f"project_{pid}"
+
+
 def run_command(project_id, command: str) -> dict:
-    """Führt einen Shell-Befehl im Projektverzeichnis aus (mit Timeout)."""
+    """Führt einen Shell-Befehl im Projektverzeichnis aus (mit Timeout).
+    Mit SANDBOX_URL im isolierten Build-Container, sonst lokal."""
     if not config.ENABLE_CODE_EXECUTION:
         return {"ok": False, "stdout": "", "stderr": "Code-Ausführung ist deaktiviert.", "code": -1}
+
+    if config.SANDBOX_URL:
+        try:
+            r = httpx.post(f"{config.SANDBOX_URL}/exec",
+                           json={"cmd": command, "cwd": _project_rel(project_id),
+                                 "timeout": config.SANDBOX_TIMEOUT},
+                           timeout=config.SANDBOX_TIMEOUT + 15)
+            d = r.json()
+            return {"ok": d.get("ok", False), "stdout": (d.get("stdout") or "")[-4000:],
+                    "stderr": (d.get("stderr") or "")[-4000:], "code": d.get("code", -1)}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "stdout": "", "stderr": f"Sandbox nicht erreichbar: {e}", "code": -1}
+
     root = _project_root(project_id)
     try:
         proc = subprocess.run(
@@ -70,3 +95,22 @@ def run_command(project_id, command: str) -> dict:
         return {"ok": False, "stdout": "", "stderr": f"Timeout nach {config.EXEC_TIMEOUT}s", "code": -1}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "stdout": "", "stderr": str(e), "code": -1}
+
+
+def reset_workspace(project_id, path: str = "") -> dict:
+    """Löscht installierte Software/Builds wieder (innerhalb des Projekt-Workspace)."""
+    if config.SANDBOX_URL:
+        try:
+            rel = _project_rel(project_id) + (("/" + path.lstrip("/")) if path else "")
+            r = httpx.post(f"{config.SANDBOX_URL}/reset", json={"path": rel}, timeout=60)
+            return r.json()
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "stderr": str(e)}
+    target = _safe_path(project_id, path) if path else _project_root(project_id)
+    try:
+        for entry in os.listdir(target):
+            full = os.path.join(target, entry)
+            shutil.rmtree(full, ignore_errors=True) if os.path.isdir(full) else os.remove(full)
+        return {"ok": True}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "stderr": str(e)}
