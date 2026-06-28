@@ -5,14 +5,14 @@ const api = {
   async put(p, b) { const r = await fetch(p, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) }); return r.json(); },
 };
 
-let currentView = "inbox";
+let currentView = "dashboard";
 let agentsCache = [];
 let chefId = null;
 let selectedAgent = null; // null = Chef-Inbox (an Nutzer)
 
 const root = document.getElementById("view-root");
 const titleEl = document.getElementById("view-title");
-const TITLES = { inbox: "Inbox", projects: "Projekte", progress: "Fortschritt", org: "Team / Organisation", tasks: "Aufgaben", workshop: "Werkstatt", cookbook: "Cookbook / Regelwerk", skills: "Skills & MCP", approvals: "Freigaben", activity: "Aktivität", settings: "Einstellungen" };
+const TITLES = { dashboard: "Dashboard", inbox: "Inbox", projects: "Projekte", progress: "Fortschritt", org: "Team / Organisation", tasks: "Aufgaben", workshop: "Werkstatt", cookbook: "Cookbook / Regelwerk", skills: "Skills & MCP", approvals: "Freigaben", activity: "Aktivität", settings: "Einstellungen" };
 let wsProject = null;
 let progProject = "";
 
@@ -48,6 +48,7 @@ document.getElementById("theme-toggle").addEventListener("click", () => {
 
 // ---------- Render-Dispatcher ----------
 async function render() {
+  if (currentView === "dashboard") return renderDashboard();
   if (currentView === "inbox") return renderInbox();
   if (currentView === "projects") return renderProjects();
   if (currentView === "progress") return renderProgress();
@@ -59,6 +60,68 @@ async function render() {
   if (currentView === "approvals") return renderApprovals();
   if (currentView === "activity") return renderActivity();
   if (currentView === "settings") return renderSettings();
+}
+
+// ---------- Dashboard ----------
+window.goView = (view) => {
+  const el = document.querySelector(`.nav-item[data-view="${view}"]`);
+  if (el) el.click();
+};
+window.openProjectProgress = (pid) => { progProject = String(pid); goView("progress"); };
+
+async function renderDashboard() {
+  const d = await api.get("/api/dashboard");
+  const s = d.stats;
+  const tile = (label, val, view, color) => `<div class="card" style="cursor:pointer" onclick="goView('${view}')">
+    <div class="stat-label">${label}</div><div class="stat" style="color:${color || 'var(--text)'}">${val}</div></div>`;
+
+  root.innerHTML = `
+    <div class="grid cols-3" style="margin-bottom:16px">
+      ${tile("Projekte", s.projects, "projects")}
+      ${tile("Mitarbeiter", s.agents, "org")}
+      ${tile("Aufgaben erledigt", `${s.tasks_done}/${s.tasks_total}`, "tasks", "var(--green)")}
+      ${tile("Offene Rückfragen", s.open_questions, "inbox", s.open_questions ? "var(--yellow)" : "var(--text)")}
+      ${tile("Freigaben", s.pending_approvals, "approvals", s.pending_approvals ? "var(--yellow)" : "var(--text)")}
+      ${tile("Überfällig", s.overdue, "progress", s.overdue ? "var(--red)" : "var(--text)")}
+    </div>
+
+    ${s.overdue ? `<div class="card" style="margin-bottom:16px;border-color:var(--red)">
+      <h3><i data-lucide="alarm-clock"></i> Überfällige Meilensteine</h3>
+      ${d.overdue_milestones.map(m => `<div class="agent-row" style="cursor:pointer" onclick="openProjectProgress(${m.project_id || ''})">
+        <div class="avatar role-qa"><i data-lucide="flag"></i></div>
+        <div class="info"><b>${esc(m.title)}</b><small>Projekt #${m.project_id ?? '–'} · ${m.days_over} Tage über Frist (${new Date(m.due_date).toLocaleDateString('de-DE')})</small></div>
+        <span class="pill fired">⚠️ überfällig</span></div>`).join("")}
+    </div>` : ''}
+
+    <div class="grid cols-2" style="margin-bottom:16px">
+      <div class="card"><h3><i data-lucide="folder-kanban"></i> Projekte</h3>
+        ${d.projects.length ? d.projects.map(p => `<div class="agent-row" style="cursor:pointer" onclick="openProjectProgress(${p.id})">
+          <div class="avatar role-project_manager"><i data-lucide="folder"></i></div>
+          <div class="info"><b>#${p.id} ${esc(p.title)}</b>
+            <small>${p.team} MA · ${p.tasks_done}/${p.tasks_total} Aufgaben · ${p.milestones_done}/${p.milestones_total} Meilensteine</small>
+            <div style="margin-top:6px">${bar(p.task_percent, p.overdue ? 'var(--red)' : 'var(--green)')}</div></div>
+          ${p.overdue ? `<span class="pill fired">${p.overdue}⚠️</span>` : `<span class="pill employed">${p.task_percent}%</span>`}
+        </div>`).join("") : `<div class="muted">Noch keine Projekte. Lege in der Inbox oder unter Projekte eins an.</div>`}
+      </div>
+      <div class="card"><h3><i data-lucide="help-circle"></i> Offene Rückfragen an dich</h3>
+        ${d.open_questions.length ? d.open_questions.map(q => `<div class="msg needs-answer" style="cursor:pointer" onclick="goView('inbox')">
+          <div class="meta"><b>${esc(q.sender)}</b><span class="spacer" style="flex:1"></span>${new Date(q.created_at).toLocaleString('de-DE')}</div>
+          <div class="subject">${esc(q.subject)}</div><div class="body">${esc((q.body||'').slice(0,140))}</div></div>`).join("")
+        : `<div class="muted">Keine offenen Rückfragen.</div>`}
+        ${d.approvals.length ? `<h3 style="margin-top:14px"><i data-lucide="shield-check"></i> Wartende Freigaben</h3>
+          ${d.approvals.map(a => `<div class="agent-row" style="cursor:pointer" onclick="goView('approvals')">
+            <div class="info"><b>${esc(a.summary)}</b></div><i data-lucide="chevron-right"></i></div>`).join("")}` : ''}
+      </div>
+    </div>
+
+    <div class="card"><h3><i data-lucide="activity"></i> Letzte Aktivität</h3>
+      ${d.recent_activity.length ? d.recent_activity.map(e => `<div class="agent-row">
+        <div class="avatar" style="background:var(--panel-2);color:var(--text-dim);width:32px;height:32px"><i data-lucide="circle"></i></div>
+        <div class="info"><b style="font-weight:500">${esc(e.text)}</b><small>${new Date(e.created_at).toLocaleString('de-DE')}</small></div></div>`).join("")
+      : `<div class="muted">Noch keine Aktivität.</div>`}
+      <div class="row" style="margin-top:10px"><button class="btn ghost sm" onclick="goView('activity')">Alle Ereignisse <i data-lucide="arrow-right"></i></button></div>
+    </div>`;
+  icons();
 }
 
 // ---------- Inbox ----------
@@ -650,5 +713,5 @@ setInterval(() => {
   refreshBadges();
   if (currentView === "inbox") loadThread();
   else if (currentView === "workshop") loadWorkshop();
-  else if (["activity", "approvals", "tasks", "org"].includes(currentView)) render();
+  else if (["dashboard", "activity", "approvals", "tasks", "org"].includes(currentView)) render();
 }, 5000);

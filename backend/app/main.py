@@ -231,6 +231,72 @@ async def run_now(steps: int = 6):
     return {"ran": done}
 
 
+@app.get("/api/dashboard")
+def dashboard():
+    """Aggregierte Übersicht für die Startseite."""
+    from datetime import datetime
+    db = SessionLocal()
+    try:
+        now_ = datetime.utcnow()
+        projects = db.query(Project).filter(Project.status == "active").order_by(Project.id.desc()).all()
+        agents = db.query(Agent).filter(Agent.status == "employed").all()
+        all_tasks = db.query(Task).all()
+        all_ms = db.query(Milestone).all()
+
+        def proj_card(p):
+            ptasks = [t for t in all_tasks if t.project_id == p.id]
+            pms = [m for m in all_ms if m.project_id == p.id]
+            td = sum(1 for t in ptasks if t.status == "done")
+            mdone = sum(1 for m in pms if m.status == "done")
+            over = sum(1 for m in pms if m.due_date and m.status != "done" and m.due_date < now_)
+            return {"id": p.id, "title": p.title, "status": p.status,
+                    "team": sum(1 for a in agents if a.project_id == p.id),
+                    "tasks_done": td, "tasks_total": len(ptasks),
+                    "task_percent": round(100 * td / len(ptasks)) if ptasks else 0,
+                    "milestones_done": mdone, "milestones_total": len(pms),
+                    "overdue": over}
+
+        overdue_ms = []
+        for m in all_ms:
+            if m.due_date and m.status != "done" and m.due_date < now_:
+                days_over = round((now_ - m.due_date).total_seconds() / 86400, 1)
+                overdue_ms.append({"id": m.id, "title": m.title, "project_id": m.project_id,
+                                   "due_date": m.due_date.isoformat(), "days_over": days_over})
+
+        questions = (db.query(Message)
+                     .filter(Message.recipient_kind == "user",
+                             Message.requires_answer == True,  # noqa: E712
+                             Message.answered == False)  # noqa: E712
+                     .order_by(Message.id.desc()).limit(10).all())
+        approvals = (db.query(PendingApproval)
+                     .filter(PendingApproval.status == "pending")
+                     .order_by(PendingApproval.id).all())
+        events = db.query(Event).order_by(Event.id.desc()).limit(8).all()
+
+        td_all = sum(1 for t in all_tasks if t.status == "done")
+        return {
+            "stats": {
+                "projects": len(projects),
+                "agents": len(agents),
+                "open_questions": len(questions),
+                "pending_approvals": len(approvals),
+                "overdue": len(overdue_ms),
+                "tasks_done": td_all, "tasks_total": len(all_tasks),
+            },
+            "projects": [proj_card(p) for p in projects],
+            "open_questions": [{"id": q.id, "subject": q.subject, "body": q.body,
+                                "sender": (db.get(Agent, q.sender_agent_id).name
+                                           if q.sender_agent_id else "System"),
+                                "created_at": q.created_at.isoformat()} for q in questions],
+            "approvals": [{"id": a.id, "summary": a.summary} for a in approvals],
+            "overdue_milestones": overdue_ms,
+            "recent_activity": [{"kind": e.kind, "text": e.text,
+                                 "created_at": e.created_at.isoformat()} for e in events],
+        }
+    finally:
+        db.close()
+
+
 @app.get("/api/state")
 def state():
     db = SessionLocal()

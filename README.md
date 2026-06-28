@@ -66,6 +66,7 @@ Dann im Browser: **http://localhost:8000**
 
 | Ansicht | Zweck |
 |--------|-------|
+| **Dashboard** | Startseite: alle Projekte mit Fortschritt, Verzüge, offene Rückfragen, Freigaben und letzte Aktivität auf einen Blick |
 | **Inbox** | Aufträge senden (**Projekt** oder **Einzelaufgabe**), mit Chef **und** jedem Agenten chatten, offene Rückfragen beantworten |
 | **Projekte** | Mehrere Projekte parallel anlegen/verwalten – jedes mit eigenem Team, Aufgaben & Workspace |
 | **Fortschritt** | Fortschrittsbalken, Roadmap/Meilensteine und das Entscheidungs-Log (warum/was/wie) je Projekt |
@@ -79,6 +80,15 @@ Dann im Browser: **http://localhost:8000**
 | **Einstellungen** | Autonomie, Freigaben, Kündigungsschwelle, Modelle pro Rolle, Ollama-Verwaltung, Hell/Dunkel |
 
 ## Funktionen im Detail
+
+### Dashboard (Startseite)
+
+Die Startseite bündelt den Gesamtüberblick: Kennzahlen-Kacheln (Projekte,
+Mitarbeiter, erledigte Aufgaben, offene Rückfragen, wartende Freigaben,
+überfällige Meilensteine), Projektkarten mit Fortschrittsbalken und
+Verzugs-Markierung, die Liste **offener Rückfragen an dich**, wartende
+**Freigaben** und die **letzte Aktivität**. Alles ist anklickbar und springt in
+die passende Ansicht.
 
 ### Mehrere Projekte & Einzelaufgaben
 
