@@ -183,6 +183,34 @@ class McpServer(Base):
     created_at = Column(DateTime, default=now)
 
 
+class Milestone(Base):
+    """Geplanter Zwischenschritt eines Projekts (Roadmap)."""
+    __tablename__ = "milestones"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
+    title = Column(String, nullable=False)
+    description = Column(Text, default="")
+    status = Column(String, default="planned")  # planned | in_progress | done
+    order_index = Column(Integer, default=0)
+    created_by_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
+    created_at = Column(DateTime, default=now)
+    completed_at = Column(DateTime, nullable=True)
+
+
+class Decision(Base):
+    """Begründung + Aktionen einer KI-Runde – das 'warum/was/wie'."""
+    __tablename__ = "decisions"
+
+    id = Column(Integer, primary_key=True)
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
+    thoughts = Column(Text, default="")          # warum (Begründung des Agenten)
+    actions_summary = Column(Text, default="")   # was/wie (durchgeführte Aktionen)
+    trigger = Column(Text, default="")           # worauf reagiert wurde
+    created_at = Column(DateTime, default=now)
+
+
 class Event(Base):
     """Aktivitäts-Log für die Timeline."""
     __tablename__ = "events"

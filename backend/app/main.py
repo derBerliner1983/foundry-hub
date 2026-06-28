@@ -17,9 +17,11 @@ from .config import config
 from .database import Base, SessionLocal, engine
 from .models import (
     Agent,
+    Decision,
     Event,
     McpServer,
     Message,
+    Milestone,
     PendingApproval,
     Project,
     Rating,
@@ -469,6 +471,133 @@ def list_projects():
     try:
         return [{"id": p.id, "title": p.title, "status": p.status}
                 for p in db.query(Project).order_by(Project.id.desc()).all()]
+    finally:
+        db.close()
+
+
+class MilestoneIn(BaseModel):
+    project_id: int | None = None
+    title: str
+    description: str = ""
+    status: str | None = None
+
+
+def _ms_dict(m: Milestone):
+    return {"id": m.id, "project_id": m.project_id, "title": m.title,
+            "description": m.description, "status": m.status, "order_index": m.order_index,
+            "created_at": m.created_at.isoformat() if m.created_at else None,
+            "completed_at": m.completed_at.isoformat() if m.completed_at else None}
+
+
+@app.get("/api/progress")
+def progress(project_id: int | None = None):
+    """Projekt-Fortschritt: Meilensteine, Aufgaben-Statistik, Stand."""
+    db = SessionLocal()
+    try:
+        msq = db.query(Milestone)
+        tq = db.query(Task)
+        if project_id is not None:
+            msq = msq.filter(Milestone.project_id == project_id)
+            tq = tq.filter(Task.project_id == project_id)
+        milestones = msq.order_by(Milestone.order_index, Milestone.id).all()
+        tasks = tq.all()
+        t_total = len(tasks)
+        t_done = sum(1 for t in tasks if t.status == "done")
+        m_total = len(milestones)
+        m_done = sum(1 for m in milestones if m.status == "done")
+        return {
+            "project_id": project_id,
+            "milestones": [_ms_dict(m) for m in milestones],
+            "tasks_total": t_total, "tasks_done": t_done,
+            "tasks_in_progress": sum(1 for t in tasks if t.status == "in_progress"),
+            "milestones_total": m_total, "milestones_done": m_done,
+            "task_percent": round(100 * t_done / t_total) if t_total else 0,
+            "milestone_percent": round(100 * m_done / m_total) if m_total else 0,
+        }
+    finally:
+        db.close()
+
+
+@app.get("/api/milestones")
+def list_milestones(project_id: int | None = None):
+    db = SessionLocal()
+    try:
+        q = db.query(Milestone)
+        if project_id is not None:
+            q = q.filter(Milestone.project_id == project_id)
+        return [_ms_dict(m) for m in q.order_by(Milestone.order_index, Milestone.id).all()]
+    finally:
+        db.close()
+
+
+@app.post("/api/milestones")
+def create_milestone(m: MilestoneIn):
+    db = SessionLocal()
+    try:
+        n = db.query(Milestone).filter(Milestone.project_id == m.project_id).count()
+        ms = Milestone(project_id=m.project_id, title=m.title, description=m.description,
+                       status=m.status or "planned", order_index=n)
+        db.add(ms)
+        db.commit()
+        return _ms_dict(ms)
+    finally:
+        db.close()
+
+
+@app.put("/api/milestones/{ms_id}")
+def update_milestone(ms_id: int, m: MilestoneIn):
+    db = SessionLocal()
+    try:
+        ms = db.get(Milestone, ms_id)
+        if not ms:
+            raise HTTPException(404, "Meilenstein nicht gefunden")
+        if m.status:
+            ms.status = m.status
+            if m.status == "done" and not ms.completed_at:
+                from .models import now as _now
+                ms.completed_at = _now()
+        if m.title:
+            ms.title = m.title
+        ms.description = m.description or ms.description
+        db.commit()
+        return _ms_dict(ms)
+    finally:
+        db.close()
+
+
+@app.delete("/api/milestones/{ms_id}")
+def delete_milestone(ms_id: int):
+    db = SessionLocal()
+    try:
+        ms = db.get(Milestone, ms_id)
+        if ms:
+            db.delete(ms)
+            db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.get("/api/decisions")
+def list_decisions(project_id: int | None = None, agent_id: int | None = None, limit: int = 60):
+    """Entscheidungs-Log: warum/was/wie die KI gehandelt hat."""
+    db = SessionLocal()
+    try:
+        q = db.query(Decision)
+        if project_id is not None:
+            q = q.filter(Decision.project_id == project_id)
+        if agent_id is not None:
+            q = q.filter(Decision.agent_id == agent_id)
+        rows = q.order_by(Decision.id.desc()).limit(min(limit, 200)).all()
+        out = []
+        for d in rows:
+            a = db.get(Agent, d.agent_id) if d.agent_id else None
+            out.append({"id": d.id, "agent": a.name if a else "—",
+                        "agent_id": d.agent_id, "project_id": d.project_id,
+                        "thoughts": d.thoughts, "actions_summary": d.actions_summary,
+                        "trigger": d.trigger,
+                        "created_at": d.created_at.isoformat() if d.created_at else None})
+        return out
     finally:
         db.close()
 

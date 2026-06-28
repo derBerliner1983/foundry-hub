@@ -10,9 +10,11 @@ from . import workspace
 from .config import config
 from .models import (
     Agent,
+    Decision,
     Event,
     McpServer,
     Message,
+    Milestone,
     PendingApproval,
     Rating,
     Rule,
@@ -280,8 +282,49 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
         elif atype == "mcp_call":
             await _do_mcp_call(db, agent, act, pctx)
 
+        # ---------- Roadmap / Meilensteine ----------
+        elif atype == "add_milestone":
+            n = db.query(Milestone).filter(Milestone.project_id == pctx).count()
+            ms = Milestone(project_id=pctx, title=act.get("title", "Meilenstein"),
+                           description=act.get("description", ""), status="planned",
+                           order_index=n, created_by_agent_id=agent.id)
+            db.add(ms)
+            log(db, "milestone", f"Meilenstein geplant: {ms.title}", agent_id=agent.id)
+
+        elif atype == "complete_milestone":
+            ms = _find_milestone(db, pctx, act)
+            if ms:
+                ms.status = "done"
+                ms.completed_at = now()
+                log(db, "milestone", f"Meilenstein erreicht: {ms.title}", agent_id=agent.id)
+
+        elif atype == "start_milestone":
+            ms = _find_milestone(db, pctx, act)
+            if ms:
+                ms.status = "in_progress"
+                log(db, "milestone", f"Meilenstein gestartet: {ms.title}", agent_id=agent.id)
+
     # Eingehende Aufgabe als in Bearbeitung markieren, falls nichts abgeschlossen
     db.commit()
+
+
+def now():
+    from datetime import datetime
+    return datetime.utcnow()
+
+
+def _find_milestone(db, pctx, act):
+    db.flush()  # in derselben Runde angelegte Meilensteine sichtbar machen
+    mid = act.get("milestone_id")
+    if mid is not None:
+        ms = db.get(Milestone, _as_int(mid))
+        if ms:
+            return ms
+    title = act.get("title", "")
+    if title:
+        return (db.query(Milestone)
+                .filter(Milestone.project_id == pctx, Milestone.title == title).first())
+    return None
 
 
 async def _do_mcp_call(db, agent, act, pctx):
@@ -543,8 +586,51 @@ async def run_agent_turn(db, agent: Agent):
 
     parsed = parse_actions(result.text)
     await execute_actions(db, agent, settings, parsed, current_task, project_ctx)
+
+    # Entscheidung protokollieren: warum (thoughts) + was/wie (Aktionen) + Auslöser
+    summary = _summarize_actions(parsed.get("actions", []))
+    db.add(Decision(agent_id=agent.id, project_id=project_ctx,
+                    thoughts=(parsed.get("thoughts", "") or "")[:2000],
+                    actions_summary=summary[:2000],
+                    trigger=" | ".join(context_lines)[:1000]))
+    db.commit()
     return {"agent": agent.name, "provider": result.provider,
             "thoughts": parsed.get("thoughts", ""), "actions": parsed.get("actions", [])}
+
+
+def _summarize_actions(actions) -> str:
+    labels = []
+    for a in actions:
+        t = a.get("type", "?")
+        if t == "message":
+            labels.append(f"Nachricht an {a.get('to')}")
+        elif t == "ask_user":
+            labels.append("Rückfrage an Nutzer")
+        elif t == "hire":
+            labels.append(f"stellt {a.get('role','?')} ein ({a.get('name','')})")
+        elif t == "fire":
+            labels.append(f"kündigt #{a.get('agent_id')}")
+        elif t == "create_task":
+            labels.append(f"Aufgabe: {a.get('title','')}")
+        elif t == "complete_task":
+            labels.append("Aufgabe abgeschlossen")
+        elif t == "rate":
+            labels.append(f"bewertet #{a.get('agent_id')} ({a.get('score')})")
+        elif t == "write_file":
+            labels.append(f"Datei: {a.get('path','')}")
+        elif t == "run_command":
+            labels.append(f"Befehl: {a.get('cmd', a.get('command',''))}")
+        elif t == "mcp_call":
+            labels.append(f"MCP {a.get('server')}.{a.get('tool')}")
+        elif t == "add_rule":
+            labels.append(f"Regel: {a.get('title','')}")
+        elif t == "add_milestone":
+            labels.append(f"Meilenstein: {a.get('title','')}")
+        elif t in ("complete_milestone", "start_milestone"):
+            labels.append(f"{t}: {a.get('title', a.get('milestone_id',''))}")
+        else:
+            labels.append(t)
+    return " · ".join(labels) if labels else "(keine Aktion)"
 
 
 def within_schedule(settings) -> bool:

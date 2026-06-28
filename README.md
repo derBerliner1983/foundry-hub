@@ -68,6 +68,7 @@ Dann im Browser: **http://localhost:8000**
 |--------|-------|
 | **Inbox** | Aufträge senden (**Projekt** oder **Einzelaufgabe**), mit Chef **und** jedem Agenten chatten, offene Rückfragen beantworten |
 | **Projekte** | Mehrere Projekte parallel anlegen/verwalten – jedes mit eigenem Team, Aufgaben & Workspace |
+| **Fortschritt** | Fortschrittsbalken, Roadmap/Meilensteine und das Entscheidungs-Log (warum/was/wie) je Projekt |
 | **Team / Org** | Organigramm mit Bewertungs-Donut, Status & Detailansicht; eigene Bewertung pro Agent |
 | **Aufgaben** | Alle Arbeitspakete nach Status (offen / in Arbeit / erledigt / fehlgeschlagen) |
 | **Werkstatt** | Datei-Workspace + Konsole pro Projekt: echte Dateien & Code-Ausführung |
@@ -142,6 +143,21 @@ bearbeiten, aktiv/inaktiv schalten oder löschen.
   und klickst **Verbinden**. Die Wurzel von `filesystem`/`git` steuerst du über
   `MCP_FS_ROOT` (Standard: `WORKSPACE_DIR`). `git` benötigt das `git`-Binary
   (im Docker-Image enthalten).
+
+### Fortschritt & Transparenz (warum/was/wie)
+
+Die Ansicht **Fortschritt** beantwortet „wo stehen wir, was ist geplant, warum
+wurde was gemacht":
+
+- **Fortschrittsbalken** – Anteil erledigter Aufgaben und erreichter Meilensteine.
+- **Roadmap / Meilensteine** – die geplanten **Zwischenschritte** mit Status
+  (geplant → läuft → erledigt) und Zeitpunkt. Der Projektleiter legt sie zu
+  Projektbeginn automatisch an (`add_milestone`); du kannst eigene ergänzen,
+  abhaken oder löschen.
+- **Entscheidungs-Log** – für **jede** KI-Runde wird gespeichert: das **Warum**
+  (Begründung des Agenten), das **Was/Wie** (durchgeführte Aktionen) und der
+  **Auslöser**. So ist jederzeit nachvollziehbar, *warum* ein Agent etwas getan
+  hat – nicht nur *dass* es passiert ist (das zeigt zusätzlich die Aktivität).
 
 ### Zeitplan – wann die KI prüft & beobachtet
 

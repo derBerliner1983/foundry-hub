@@ -12,8 +12,9 @@ let selectedAgent = null; // null = Chef-Inbox (an Nutzer)
 
 const root = document.getElementById("view-root");
 const titleEl = document.getElementById("view-title");
-const TITLES = { inbox: "Inbox", projects: "Projekte", org: "Team / Organisation", tasks: "Aufgaben", workshop: "Werkstatt", cookbook: "Cookbook / Regelwerk", skills: "Skills & MCP", approvals: "Freigaben", activity: "Aktivität", settings: "Einstellungen" };
+const TITLES = { inbox: "Inbox", projects: "Projekte", progress: "Fortschritt", org: "Team / Organisation", tasks: "Aufgaben", workshop: "Werkstatt", cookbook: "Cookbook / Regelwerk", skills: "Skills & MCP", approvals: "Freigaben", activity: "Aktivität", settings: "Einstellungen" };
 let wsProject = null;
+let progProject = "";
 
 function icons() { window.lucide && lucide.createIcons(); }
 function esc(s) { return (s || "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
@@ -49,6 +50,7 @@ document.getElementById("theme-toggle").addEventListener("click", () => {
 async function render() {
   if (currentView === "inbox") return renderInbox();
   if (currentView === "projects") return renderProjects();
+  if (currentView === "progress") return renderProgress();
   if (currentView === "org") return renderOrg();
   if (currentView === "tasks") return renderTasks();
   if (currentView === "workshop") return renderWorkshop();
@@ -282,6 +284,79 @@ window.gotoWorkshop = (pid) => {
   wsProject = pid;
   document.querySelector('.nav-item[data-view="workshop"]').click();
 };
+
+// ---------- Fortschritt ----------
+async function renderProgress() {
+  const projects = await api.get("/api/projects");
+  const opts = [`<option value="">Firma gesamt / Einzelaufgaben</option>`]
+    .concat(projects.map(p => `<option value="${p.id}" ${progProject == p.id ? "selected" : ""}>#${p.id} ${esc(p.title)}</option>`)).join("");
+  root.innerHTML = `
+    <div class="card" style="margin-bottom:14px">
+      <div class="row"><h3 style="margin:0"><i data-lucide="gauge"></i> Projekt</h3>
+        <div class="spacer" style="flex:1"></div>
+        <select id="pg-proj" style="width:auto;margin:0">${opts}</select></div>
+    </div>
+    <div id="pg-body"></div>`;
+  icons();
+  document.getElementById("pg-proj").onchange = e => { progProject = e.target.value; loadProgress(); };
+  loadProgress();
+}
+
+function bar(pct, color) {
+  return `<div style="background:var(--bg-2);border-radius:8px;height:14px;overflow:hidden;border:1px solid var(--border)">
+    <div style="width:${pct}%;height:100%;background:${color}"></div></div>`;
+}
+
+async function loadProgress() {
+  const body = document.getElementById("pg-body");
+  if (!body) return;
+  const pid = progProject === "" ? "" : "project_id=" + progProject;
+  const [prog, decisions, milestones] = await Promise.all([
+    api.get("/api/progress" + (pid ? "?" + pid : "")),
+    api.get("/api/decisions" + (pid ? "?" + pid : "")),
+    api.get("/api/milestones" + (pid ? "?" + pid : "")),
+  ]);
+  const stCls = { planned: "resigned", in_progress: "employed", done: "employed" };
+  const stTxt = { planned: "geplant", in_progress: "läuft", done: "✓ erledigt" };
+  body.innerHTML = `
+    <div class="grid cols-2" style="margin-bottom:14px">
+      <div class="card"><div class="stat-label">Aufgaben erledigt</div>
+        <div class="stat">${prog.tasks_done}/${prog.tasks_total} <span class="muted" style="font-size:15px">(${prog.task_percent}%)</span></div>
+        ${bar(prog.task_percent, "var(--green)")}
+        <div class="muted" style="margin-top:6px">${prog.tasks_in_progress} in Arbeit</div></div>
+      <div class="card"><div class="stat-label">Meilensteine erreicht</div>
+        <div class="stat">${prog.milestones_done}/${prog.milestones_total} <span class="muted" style="font-size:15px">(${prog.milestone_percent}%)</span></div>
+        ${bar(prog.milestone_percent, "var(--accent)")}</div>
+    </div>
+    <div class="card" style="margin-bottom:14px"><h3><i data-lucide="flag"></i> Roadmap / Zwischenschritte</h3>
+      ${milestones.length ? milestones.map(m => `<div class="agent-row">
+        <div class="avatar role-${m.status === 'done' ? 'developer' : (m.status === 'in_progress' ? 'project_manager' : 'planner')}">
+          <i data-lucide="${m.status === 'done' ? 'check' : (m.status === 'in_progress' ? 'loader' : 'circle')}"></i></div>
+        <div class="info"><b>${esc(m.title)}</b><small>${esc(m.description || '')}${m.completed_at ? ' · erledigt ' + new Date(m.completed_at).toLocaleString('de-DE') : ''}</small></div>
+        <span class="pill ${stCls[m.status]}">${stTxt[m.status]}</span>
+        ${m.status !== 'done' ? `<button class="btn ghost sm" onclick="msDone(${m.id})"><i data-lucide="check"></i></button>` : ''}
+        <button class="btn red sm" onclick="msDel(${m.id})"><i data-lucide="trash-2"></i></button>
+      </div>`).join("") : `<div class="muted">Noch keine Meilensteine. Der Projektleiter plant sie automatisch – oder lege selbst welche an:</div>`}
+      <div class="row" style="margin-top:10px"><input id="ms-title" placeholder="Eigener Meilenstein" style="margin:0"/>
+        <button class="btn sm" id="ms-add" style="white-space:nowrap"><i data-lucide="plus"></i> Hinzufügen</button></div>
+    </div>
+    <div class="card"><h3><i data-lucide="brain"></i> Entscheidungen der KI – warum &amp; was</h3>
+      ${decisions.length ? decisions.map(d => `<div class="msg from-agent">
+        <div class="meta"><b>${esc(d.agent)}</b><span class="spacer" style="flex:1"></span>${new Date(d.created_at).toLocaleString('de-DE')}</div>
+        ${d.thoughts ? `<div class="body"><b>Warum:</b> ${esc(d.thoughts)}</div>` : ''}
+        <div class="body"><b>Was/wie:</b> ${esc(d.actions_summary)}</div>
+        ${d.trigger ? `<div class="tag" style="margin-top:6px">Auslöser: ${esc(d.trigger.slice(0,160))}</div>` : ''}
+      </div>`).join("") : `<div class="empty">Noch keine Entscheidungen protokolliert.</div>`}
+    </div>`;
+  icons();
+  document.getElementById("ms-add").onclick = async () => {
+    const t = document.getElementById("ms-title").value.trim(); if (!t) return;
+    await api.post("/api/milestones", { project_id: progProject === "" ? null : Number(progProject), title: t });
+    loadProgress();
+  };
+}
+window.msDone = async (id) => { await api.put("/api/milestones/" + id, { title: "", status: "done" }); loadProgress(); };
+window.msDel = async (id) => { await fetch("/api/milestones/" + id, { method: "DELETE" }); loadProgress(); };
 
 // ---------- Cookbook / Regelwerk ----------
 async function renderCookbook() {
