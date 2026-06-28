@@ -45,6 +45,15 @@ Du gibst dem **Chef** einen Auftrag, er **stellt Projektleiter ein**, die wieder
 
 ## Schnellstart
 
+Am einfachsten per Skript (prüft Docker, legt `.env` an, baut & startet, optional
+HTTPS und lokales Modell):
+
+```bash
+./install.sh
+```
+
+Oder manuell:
+
 ```bash
 docker compose up --build
 ```
