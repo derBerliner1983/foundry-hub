@@ -373,6 +373,23 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
         elif atype == "mcp_call":
             await _do_mcp_call(db, agent, act, pctx)
 
+        elif atype == "deploy":
+            proj = db.get(Project, pctx) if pctx else None
+            cmd = proj.deploy_command if proj else ""
+            if cmd:
+                res = workspace.run_command(pctx, cmd)
+                log(db, "exec", f"Deploy → {'ok' if res['ok'] else 'Fehler'}\n{res['stdout'][:500]}", agent_id=agent.id)
+            else:
+                log(db, "error", "Kein Deploy-Befehl im Projekt gesetzt", agent_id=agent.id)
+
+        elif atype == "github_push":
+            from . import github_util
+            res = github_util.push_project(pctx, act.get("repo", "ai-hub-projekt"), True)
+            log(db, "git", f"GitHub-Push: {res.get('url') or res.get('error')}", agent_id=agent.id)
+            send_message(db, sender_kind="system", sender_agent_id=None,
+                         recipient_kind="agent", recipient_agent_id=agent.id,
+                         subject="GitHub", body=str(res.get("url") or res.get("error")), project_id=pctx)
+
         elif atype == "search_memory":
             from . import knowledge
             res = knowledge.search_text(act.get("query", ""))
@@ -587,11 +604,13 @@ def _do_run_command(db, agent, settings, act, current_task, pctx=None):
                              requested_by_agent_id=agent.id,
                              summary=f"{agent.name} möchte riskanten Befehl ausführen: {cmd[:80]}")
         db.add(ap)
+        db.flush()
         log(db, "info", f"Freigabe für Befehl angefragt: {cmd[:60]}", agent_id=agent.id)
         send_message(db, sender_kind="agent", sender_agent_id=agent.id,
                      recipient_kind="user", recipient_agent_id=None,
                      subject="🔐 Freigabe: riskanter Befehl", body=ap.summary, requires_answer=True)
-        maybe_notify(db, "question", "Freigabe: riskanter Befehl", ap.summary)
+        maybe_notify(db, "question", "Freigabe: riskanter Befehl",
+                     ap.summary + f"\nAntworte: /ja {ap.id}  oder  /nein {ap.id}")
         return
     res = workspace.run_command(pctx, cmd)
     if current_task:
@@ -652,13 +671,15 @@ def _do_hire(db, agent, settings, act, pctx=None):
             summary=f"{agent.name} möchte {role_title(target_role)} einstellen ({act.get('name','')})",
         )
         db.add(approval)
+        db.flush()
         log(db, "hire", f"Freigabe angefragt: {approval.summary}", agent_id=agent.id)
         send_message(db, sender_kind="agent", sender_agent_id=agent.id,
                      recipient_kind="user", recipient_agent_id=None,
                      subject="🔐 Freigabe: Einstellung",
                      body=approval.summary + " – bitte in den Freigaben bestätigen.",
                      requires_answer=True)
-        maybe_notify(db, "question", "Freigabe nötig: Einstellung", approval.summary)
+        maybe_notify(db, "question", "Freigabe nötig: Einstellung",
+                     approval.summary + f"\nAntworte: /ja {approval.id}  oder  /nein {approval.id}")
         return None
 
     return _create_agent(db, target_role, act.get("name"), provider, model,
@@ -953,6 +974,65 @@ def _active_tenants(db, force=False, only_tenant=None) -> list:
         if force or (s.auto_run and within_schedule(s)):
             out.append(s.tenant_id)
     return out
+
+
+_tg_offset = {}  # token -> letzte update_id
+
+
+def _apply_approval(db, ap):
+    """Führt eine freigegebene Aktion aus (wie der API-Endpunkt)."""
+    import json as _json
+    action = _json.loads(ap.action_json)
+    t = action.get("type")
+    if t == "hire":
+        _create_agent(db, action["role"], action["name"], action["provider"],
+                      action["model"], action.get("manager_id"), action.get("project_id"))
+    elif t == "fire":
+        target = db.get(Agent, action["agent_id"])
+        if target:
+            target.status = "fired"
+    elif t == "run_command":
+        workspace.run_command(action.get("pctx"), action.get("cmd", ""))
+
+
+def poll_telegram(db):
+    """Liest Telegram-Antworten und verarbeitet /ja <id> bzw. /nein <id>."""
+    import re as _re
+    import httpx
+    for s in db.query(Settings).all():
+        if not (s.telegram_token and s.telegram_chat_id):
+            continue
+        try:
+            params = {"timeout": 0, "offset": _tg_offset.get(s.telegram_token, 0) + 1}
+            r = httpx.get(f"https://api.telegram.org/bot{s.telegram_token}/getUpdates",
+                          params=params, timeout=8)
+            updates = r.json().get("result", [])
+        except Exception:  # noqa: BLE001
+            continue
+        for up in updates:
+            _tg_offset[s.telegram_token] = up["update_id"]
+            msg = up.get("message") or {}
+            if str(msg.get("chat", {}).get("id")) != str(s.telegram_chat_id):
+                continue
+            text = (msg.get("text") or "").strip().lower()
+            m = _re.match(r"/?(ja|nein|approve|reject)\s+#?(\d+)", text)
+            if not m:
+                continue
+            decision, aid = m.group(1), int(m.group(2))
+            ap = db.query(PendingApproval).filter(PendingApproval.id == aid,
+                                                  PendingApproval.tenant_id == s.tenant_id,
+                                                  PendingApproval.status == "pending").first()
+            if not ap:
+                continue
+            context.set_tenant(s.tenant_id)
+            if decision in ("ja", "approve"):
+                ap.status = "approved"
+                _apply_approval(db, ap)
+                log(db, "info", f"Freigabe #{aid} per Telegram bestätigt")
+            else:
+                ap.status = "rejected"
+                log(db, "info", f"Freigabe #{aid} per Telegram abgelehnt")
+            db.commit()
 
 
 def run_recurring(db):

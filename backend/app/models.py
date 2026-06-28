@@ -111,6 +111,7 @@ class Project(Base):
     description = Column(Text, default="")
     status = Column(String, default="active")  # active | done | cancelled
     test_command = Column(String, default="")  # z. B. "pytest -q" für die Verifikation
+    deploy_command = Column(String, default="")  # z. B. "flyctl deploy" / rsync …
     created_at = Column(DateTime, default=now)
 
 

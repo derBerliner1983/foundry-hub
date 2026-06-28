@@ -136,6 +136,7 @@ async def orchestrator_loop():
             db = SessionLocal()
             try:
                 orch.run_recurring(db)
+                orch.poll_telegram(db)
                 await orch.tick(db)
                 s = orch.get_settings(db)
                 sleep_for = max(1.0, s.tick_seconds or config.TICK_INTERVAL_SECONDS)
@@ -1172,6 +1173,129 @@ def sandbox_reset(project_id: int | None = None):
     return workspace.reset_workspace(project_id)
 
 
+@app.get("/api/github/status")
+def github_status():
+    from . import github_util
+    return github_util.status()
+
+
+class GithubPush(BaseModel):
+    project_id: int | None = None
+    repo_name: str
+    private: bool = True
+
+
+@app.post("/api/github/push")
+def github_push(g: GithubPush):
+    from . import github_util
+    return github_util.push_project(g.project_id, g.repo_name, g.private)
+
+
+class ProjectCfg(BaseModel):
+    test_command: str | None = None
+    deploy_command: str | None = None
+
+
+@app.put("/api/projects/{project_id}")
+def update_project(project_id: int, cfg: ProjectCfg):
+    db = SessionLocal()
+    try:
+        p = db.get(Project, project_id)
+        if not p or p.tenant_id != context.tid():
+            raise HTTPException(404, "Projekt nicht gefunden")
+        if cfg.test_command is not None:
+            p.test_command = cfg.test_command
+        if cfg.deploy_command is not None:
+            p.deploy_command = cfg.deploy_command
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.get("/api/projects/{project_id}")
+def get_project(project_id: int):
+    db = SessionLocal()
+    try:
+        p = db.get(Project, project_id)
+        if not p or p.tenant_id != context.tid():
+            raise HTTPException(404, "Projekt nicht gefunden")
+        return {"id": p.id, "title": p.title, "test_command": p.test_command,
+                "deploy_command": p.deploy_command}
+    finally:
+        db.close()
+
+
+@app.post("/api/deploy")
+def deploy(project_id: int | None = None):
+    """Führt den Deploy-Befehl des Projekts aus (Sandbox/lokal)."""
+    db = SessionLocal()
+    try:
+        cmd = ""
+        if project_id is not None:
+            p = db.get(Project, project_id)
+            if not p or p.tenant_id != context.tid():
+                raise HTTPException(404, "Projekt nicht gefunden")
+            cmd = p.deploy_command
+    finally:
+        db.close()
+    if not cmd:
+        return {"ok": False, "error": "Kein Deploy-Befehl für dieses Projekt gesetzt."}
+    res = workspace.run_command(project_id, cmd)
+    return {"ok": res["ok"], "output": (res["stdout"] + "\n" + res["stderr"])[-4000:]}
+
+
+# --- Projekt-Vorlagen ---
+TEMPLATES = {
+    "landingpage": {"title": "Landingpage", "milestones": ["Design & Wireframe", "Inhalte", "Umsetzung (HTML/CSS)", "Test & Launch"],
+                    "brief": "Erstelle eine moderne, responsive Landingpage."},
+    "webapp": {"title": "Kleine Web-App", "milestones": ["Konzept & Datenmodell", "Backend/API", "Frontend", "Tests", "Deploy"],
+               "brief": "Baue eine kleine Web-App mit Backend und Frontend."},
+    "report": {"title": "Recherche-Report", "milestones": ["Recherche", "Struktur", "Schreiben", "Review"],
+               "brief": "Erstelle einen strukturierten Recherche-Report zum Thema."},
+    "automation": {"title": "Automatisierungs-Skript", "milestones": ["Anforderungen", "Skript", "Tests", "Doku"],
+                   "brief": "Entwickle ein Skript, das eine Aufgabe automatisiert."},
+}
+
+
+@app.get("/api/templates")
+def list_templates():
+    return [{"key": k, "title": v["title"], "milestones": v["milestones"]} for k, v in TEMPLATES.items()]
+
+
+class FromTemplate(BaseModel):
+    template: str
+    title: str
+    description: str = ""
+
+
+@app.post("/api/projects/from-template")
+def project_from_template(t: FromTemplate):
+    from .models import Milestone
+    tpl = TEMPLATES.get(t.template)
+    if not tpl:
+        raise HTTPException(400, "Unbekannte Vorlage")
+    db = SessionLocal()
+    try:
+        chef = ensure_seed(db, context.tid())
+        context.set_tenant(context.tid())
+        project = Project(title=t.title, description=t.description or tpl["brief"])
+        db.add(project)
+        db.flush()
+        for i, m in enumerate(tpl["milestones"]):
+            db.add(Milestone(project_id=project.id, title=m, status="planned", order_index=i))
+        orch.send_message(db, sender_kind="user", sender_agent_id=None,
+                          recipient_kind="agent", recipient_agent_id=chef.id,
+                          subject="Neues Projekt: " + t.title,
+                          body=(t.description or tpl["brief"]) +
+                          "\n\nGeplante Schritte: " + ", ".join(tpl["milestones"]),
+                          project_id=project.id)
+        db.commit()
+        return {"ok": True, "project_id": project.id}
+    finally:
+        db.close()
+
+
 _local_preview = {"proc": None}
 
 
@@ -1835,6 +1959,28 @@ async def assistant_chat(c: ChatIn):
 @app.post("/api/assistant/send")
 def assistant_send(m: EmailOut):
     return email_util.send_email(m.to, m.subject, m.body)
+
+
+class EmailTask(BaseModel):
+    subject: str
+    body: str = ""
+
+
+@app.post("/api/assistant/email-to-task")
+def email_to_task(e: EmailTask):
+    """Macht aus einer E-Mail eine Einzelaufgabe an die Firma."""
+    db = SessionLocal()
+    try:
+        chef = ensure_seed(db, context.tid())
+        context.set_tenant(context.tid())
+        orch.send_message(db, sender_kind="user", sender_agent_id=None,
+                          recipient_kind="agent", recipient_agent_id=chef.id,
+                          subject="Einzelaufgabe (aus E-Mail): " + e.subject,
+                          body=e.body or e.subject)
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
 
 
 # --------------------------------------------------------------------------- #
