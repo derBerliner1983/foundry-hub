@@ -68,6 +68,19 @@ AI-Hub ist **mehrbenutzerfähig**:
 - **Teilen** – der Owner kann seine Firma für einen Nutzer freigeben; dieser
   wechselt dann oben rechts zwischen „Meine Firma" und der geteilten Firma.
 
+**Sicherheit (öffentlicher Betrieb):** Login-Sperre nach 5 Fehlversuchen
+(15 Min.), Security-Header (`X-Frame-Options`, `nosniff`, `Referrer-Policy`,
+HSTS bei HTTPS), Passwort selbst ändern und Owner-Passwort-Reset (beendet alle
+Sitzungen des Nutzers). Für HTTPS liegt eine **Reverse-Proxy-Vorlage** bei:
+
+```bash
+docker compose -f docker-compose.yml -f deploy/docker-compose.tls.yml up -d
+```
+
+(nginx + Let's Encrypt; siehe `deploy/nginx.conf`. uvicorn läuft mit
+`--proxy-headers`, erkennt also HTTPS hinter dem Proxy und setzt das Session-
+Cookie dann als `Secure`.)
+
 > **Läuft auch ohne API-Keys.** Ohne Schlüssel antworten die Agenten über den
 > eingebauten **Mock-Provider** (Demo-Verhalten), sodass du den kompletten Ablauf
 > ausprobieren kannst. Für echte Modelle `ANTHROPIC_API_KEY` und/oder

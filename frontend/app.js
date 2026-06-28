@@ -699,6 +699,12 @@ async function renderSettings() {
   const autoOpts = { full: "Voll autonom (keine Rückfragen)", ask_for_hiring: "Nachfragen bei Einstellung/Kündigung", ask_for_everything: "Bei allem Wichtigen nachfragen" };
   const schedOpts = { always: "Dauerbetrieb (immer)", window: "Nur in einem Zeitfenster", manual: "Nur manuell (auf Knopfdruck)" };
   root.innerHTML = `
+    <div class="card" style="margin-bottom:14px"><h3><i data-lucide="lock"></i> Konto & Sicherheit</h3>
+      <label>Aktuelles Passwort</label><input id="pw-old" type="password" autocomplete="current-password"/>
+      <label>Neues Passwort (min. 6 Zeichen)</label><input id="pw-new" type="password" autocomplete="new-password"/>
+      <button class="btn" id="pw-save"><i data-lucide="key"></i> Passwort ändern</button>
+      <span class="muted" id="pw-status" style="margin-left:8px"></span>
+    </div>
     <div class="card" style="margin-bottom:14px"><h3><i data-lucide="clock"></i> Zeitplan – wann die KI prüft & beobachtet</h3>
       <div class="grid cols-2" style="gap:10px">
         <div><label>Modus</label>
@@ -801,6 +807,13 @@ async function renderSettings() {
     toggles[id] = el.querySelector(".switch").classList.contains("on");
     el.onclick = () => { const sw = el.querySelector(".switch"); sw.classList.toggle("on"); toggles[id] = sw.classList.contains("on"); };
   });
+  // Passwort ändern
+  document.getElementById("pw-save").onclick = async () => {
+    const r = await fetch("/api/auth/password", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ old_password: document.getElementById("pw-old").value, new_password: document.getElementById("pw-new").value }) });
+    const d = await r.json().catch(() => ({}));
+    document.getElementById("pw-status").textContent = r.status === 200 ? "✓ geändert" : ("✕ " + (d.detail || "Fehler"));
+  };
   // Zugangsdaten speichern (nur ausgefüllte Felder)
   document.getElementById("sec-save").onclick = async () => {
     const payload = {};
@@ -978,6 +991,7 @@ async function renderUsers() {
         ${u.is_owner ? "" : (u.has_access_to_my_firm
           ? `<span class="pill employed">Zugriff auf deine Firma</span><button class="btn ghost sm" onclick="unshare(${u.id})">entziehen</button>`
           : `<button class="btn ghost sm" onclick="shareWith('${esc(u.username)}')"><i data-lucide="share-2"></i> meine Firma teilen</button>`)}
+        ${u.is_owner ? "" : `<button class="btn ghost sm" onclick="resetPw(${u.id}, '${esc(u.username)}')"><i data-lucide="key-round"></i> Passwort</button>`}
       </div>`).join("")}
     </div>`;
   icons();
@@ -991,5 +1005,11 @@ async function renderUsers() {
 }
 window.shareWith = async (username) => { await api.post("/api/access", { username }); renderUsers(); };
 window.unshare = async (uid) => { await fetch("/api/access/" + uid, { method: "DELETE" }); renderUsers(); };
+window.resetPw = async (uid, name) => {
+  const pw = prompt("Neues Passwort für " + name + " (min. 6 Zeichen):");
+  if (!pw) return;
+  const r = await fetch(`/api/users/${uid}/reset-password`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ new_password: pw }) });
+  alert(r.status === 200 ? "Passwort gesetzt." : "Fehler.");
+};
 
 init();

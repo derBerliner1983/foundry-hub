@@ -9,6 +9,22 @@ from .models import Access, Session as DBSession, User
 
 COOKIE = "aihub_session"
 SESSION_DAYS = 30
+MAX_FAILS = 5          # Fehlversuche bis zur Sperre
+LOCKOUT_MINUTES = 15   # Sperrdauer
+
+# In-Memory Fehlversuchs-Tracker je Benutzer (reicht für Einzelprozess)
+_fails: dict = {}
+
+
+def _is_locked(username: str) -> bool:
+    now = datetime.utcnow()
+    times = [t for t in _fails.get(username, []) if (now - t).total_seconds() < LOCKOUT_MINUTES * 60]
+    _fails[username] = times
+    return len(times) >= MAX_FAILS
+
+
+def _record_fail(username: str):
+    _fails.setdefault(username, []).append(datetime.utcnow())
 
 
 def hash_password(password: str, salt: str = None):
@@ -47,16 +63,55 @@ def create_user(username: str, password: str, is_owner: bool = False):
 
 
 def login(username: str, password: str):
+    """Gibt (token, error) zurück. error: None | 'locked' | 'invalid'."""
+    if _is_locked(username):
+        return None, "locked"
     db = SessionLocal()
     try:
         u = db.query(User).filter(User.username == username).first()
         if not u or not verify_password(password, u.salt, u.password_hash):
-            return None
+            _record_fail(username)
+            return None, "invalid"
+        _fails.pop(username, None)
         token = pysecrets.token_urlsafe(32)
         db.add(DBSession(token=token, user_id=u.id, active_tenant_id=u.id,
                          expires_at=datetime.utcnow() + timedelta(days=SESSION_DAYS)))
         db.commit()
-        return token
+        return token, None
+    finally:
+        db.close()
+
+
+def change_password(user_id: int, old_password: str, new_password: str):
+    db = SessionLocal()
+    try:
+        u = db.get(User, user_id)
+        if not u or not verify_password(old_password, u.salt, u.password_hash):
+            return False, "Aktuelles Passwort falsch"
+        if len(new_password) < 6:
+            return False, "Neues Passwort zu kurz (min. 6 Zeichen)"
+        u.password_hash, u.salt = hash_password(new_password)
+        db.commit()
+        return True, None
+    finally:
+        db.close()
+
+
+def reset_password(user_id: int, new_password: str):
+    """Owner setzt das Passwort eines Nutzers neu."""
+    db = SessionLocal()
+    try:
+        u = db.get(User, user_id)
+        if not u:
+            return False, "Nutzer nicht gefunden"
+        if len(new_password) < 6:
+            return False, "Passwort zu kurz (min. 6 Zeichen)"
+        u.password_hash, u.salt = hash_password(new_password)
+        # alle Sitzungen dieses Nutzers beenden
+        for s in db.query(DBSession).filter(DBSession.user_id == user_id).all():
+            db.delete(s)
+        db.commit()
+        return True, None
     finally:
         db.close()
 

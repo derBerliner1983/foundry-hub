@@ -69,19 +69,29 @@ _PUBLIC = {"/api/health", "/api/auth/login", "/api/auth/setup",
            "/api/auth/status", "/api/auth/me"}
 
 
+def _harden(resp, https: bool):
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "SAMEORIGIN"
+    resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    if https:
+        resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return resp
+
+
 @app.middleware("http")
 async def auth_and_tenant(request, call_next):
     path = request.url.path
-    # Statische UI/__ und öffentliche Auth-Routen frei
+    https = request.url.scheme == "https"
+    # Statische UI und öffentliche Auth-Routen frei
     if not path.startswith("/api/") or path in _PUBLIC:
-        return await call_next(request)
+        return _harden(await call_next(request), https)
     ctx = auth.current(request)
     if not ctx:
         from fastapi.responses import JSONResponse
-        return JSONResponse({"error": "Nicht angemeldet"}, status_code=401)
+        return _harden(JSONResponse({"error": "Nicht angemeldet"}, status_code=401), https)
     context.set_tenant(ctx["tenant_id"])
     request.state.user = ctx
-    return await call_next(request)
+    return _harden(await call_next(request), https)
 
 
 async def _startup_mcp():
@@ -295,17 +305,48 @@ def auth_setup(c: Credentials, request: Request, response: Response):
         ensure_seed(db, uid)
     finally:
         db.close()
-    token = auth.login(c.username, c.password)
+    token, _ = auth.login(c.username, c.password)
     _set_cookie(response, token, request.url.scheme == "https")
     return {"ok": True, "owner": True}
 
 
 @app.post("/api/auth/login")
 def auth_login(c: Credentials, request: Request, response: Response):
-    token = auth.login(c.username, c.password)
+    token, err = auth.login(c.username, c.password)
+    if err == "locked":
+        raise HTTPException(429, "Zu viele Fehlversuche – kurz warten und erneut versuchen")
     if not token:
         raise HTTPException(401, "Benutzername oder Passwort falsch")
     _set_cookie(response, token, request.url.scheme == "https")
+    return {"ok": True}
+
+
+class PasswordChange(BaseModel):
+    old_password: str
+    new_password: str
+
+
+class PasswordReset(BaseModel):
+    new_password: str
+
+
+@app.post("/api/auth/password")
+def change_own_password(p: PasswordChange, request: Request):
+    ctx = auth.current(request)
+    if not ctx:
+        raise HTTPException(401, "Nicht angemeldet")
+    ok, err = auth.change_password(ctx["user_id"], p.old_password, p.new_password)
+    if not ok:
+        raise HTTPException(400, err)
+    return {"ok": True}
+
+
+@app.post("/api/users/{user_id}/reset-password")
+def reset_user_password(user_id: int, p: PasswordReset, request: Request):
+    _require_owner(request)
+    ok, err = auth.reset_password(user_id, p.new_password)
+    if not ok:
+        raise HTTPException(400, err)
     return {"ok": True}
 
 
