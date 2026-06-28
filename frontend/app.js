@@ -210,8 +210,9 @@ async function loadAssistantEmails() {
   el.innerHTML = `<div class="muted">lade …</div>`;
   const r = await api.get("/api/assistant/emails");
   if (!r.ok) { el.innerHTML = `<div class="tag" style="color:var(--red)">${esc(r.error || 'Fehler')}</div>`; return; }
-  el.innerHTML = r.emails.length ? r.emails.map(m => `<div class="msg">
-    <div class="meta"><b>${esc(m.from)}</b><span class="spacer" style="flex:1"></span>${esc(m.date)}</div>
+  el.innerHTML = r.emails.length ? r.emails.map((m, i) => `<div class="msg">
+    <div class="meta"><b>${esc(m.from)}</b><span class="spacer" style="flex:1"></span>${esc(m.date)}
+      <button class="btn ghost sm" onclick='emailToTask(${JSON.stringify(m.subject)}, ${JSON.stringify(m.snippet)})' style="margin-left:6px">→ Auftrag</button></div>
     <div class="subject">${esc(m.subject)}</div><div class="body">${esc(m.snippet)}</div></div>`).join("")
     : `<div class="muted">Keine E-Mails.</div>`;
 }
@@ -223,6 +224,10 @@ function renderChat() {
     || `<div class="muted">Stell eine Frage – z. B. „Fasse meine wichtigsten Mails zusammen" oder „Entwirf eine Antwort an …".</div>`;
   el.scrollTop = el.scrollHeight;
 }
+window.emailToTask = async (subject, body) => {
+  await api.post("/api/assistant/email-to-task", { subject, body });
+  alert("Als Auftrag an die Firma übergeben.");
+};
 window.asSend = async () => {
   const inp = document.getElementById("as-msg"); const msg = inp.value.trim(); if (!msg) return;
   assistChat.push({ role: "user", text: msg }); inp.value = ""; renderChat();
@@ -423,8 +428,15 @@ async function renderWorkshop() {
         <button class="btn ghost sm" id="ws-up"><i data-lucide="upload"></i> Hochladen</button>
         <button class="btn ghost sm" id="ws-zip"><i data-lucide="download"></i> ZIP</button>
         <button class="btn ghost sm" id="ws-preview"><i data-lucide="play-circle"></i> Vorschau</button>
+        <button class="btn ghost sm" id="ws-github"><i data-lucide="github"></i> GitHub</button>
+        <button class="btn ghost sm" id="ws-deploy"><i data-lucide="rocket"></i> Deploy</button>
         <button class="btn ghost sm" id="ws-reset"><i data-lucide="trash-2"></i> leeren</button>
         <select id="ws-proj" style="width:auto;margin:0">${opts || '<option>kein Projekt</option>'}</select></div>
+      <div class="row" style="margin-top:8px;gap:8px">
+        <input id="ws-testcmd" placeholder="Testbefehl (z. B. pytest -q)" style="margin:0"/>
+        <input id="ws-deploycmd" placeholder="Deploy-Befehl (z. B. flyctl deploy)" style="margin:0"/>
+        <button class="btn ghost sm" id="ws-cfgsave" style="white-space:nowrap">speichern</button>
+      </div>
     </div>
     <div class="grid cols-2">
       <div class="card"><h3><i data-lucide="files"></i> Dateien</h3><div id="ws-files"></div></div>
@@ -460,6 +472,29 @@ async function renderWorkshop() {
     const r = await api.post("/api/preview/start", { project_id: wsProject ? Number(wsProject) : null, cmd: cmd || "" });
     if (r.ok) { setTimeout(() => window.open(r.url, "_blank"), 1200); }
     else alert("Vorschau fehlgeschlagen: " + (r.error || ""));
+  };
+  document.getElementById("ws-github").onclick = async () => {
+    const st = await api.get("/api/github/status");
+    if (!st.configured) { alert("Bitte zuerst ein GitHub-Token unter Einstellungen → Zugangsdaten eintragen."); return; }
+    const repo = prompt("Repository-Name auf GitHub (" + (st.login || "") + "):", "ai-hub-projekt");
+    if (!repo) return;
+    const r = await api.post("/api/github/push", { project_id: wsProject ? Number(wsProject) : null, repo_name: repo, private: true });
+    alert(r.ok ? "Gepusht: " + r.url : "Fehler: " + (r.error || ""));
+  };
+  document.getElementById("ws-deploy").onclick = async () => {
+    const r = await api.post("/api/deploy?project_id=" + (wsProject || ""));
+    alert(r.ok ? "Deploy gestartet/erledigt." : ("Deploy: " + (r.error || (r.output || "").slice(-300))));
+  };
+  // Projekt-Konfiguration (Test/Deploy) laden + speichern
+  if (wsProject) api.get("/api/projects/" + wsProject).then(p => {
+    const tc = document.getElementById("ws-testcmd"), dc = document.getElementById("ws-deploycmd");
+    if (tc) tc.value = p.test_command || ""; if (dc) dc.value = p.deploy_command || "";
+  }).catch(() => {});
+  const cfgSave = document.getElementById("ws-cfgsave");
+  if (cfgSave) cfgSave.onclick = async () => {
+    if (!wsProject) { alert("Erst ein Projekt wählen."); return; }
+    await api.put("/api/projects/" + wsProject, { test_command: document.getElementById("ws-testcmd").value, deploy_command: document.getElementById("ws-deploycmd").value });
+    cfgSave.textContent = "✓";
   };
   api.get("/api/sandbox/status").then(st => {
     const el = document.getElementById("ws-sandbox"); if (!el) return;
@@ -519,7 +554,9 @@ async function renderProjects() {
       <h3><i data-lucide="folder-plus"></i> Neues Projekt</h3>
       <input id="np-title" placeholder="Projekttitel"/>
       <textarea id="np-desc" placeholder="Ziel, Umfang, Frist …"></textarea>
-      <button class="btn" id="np-send"><i data-lucide="rocket"></i> Projekt starten</button>
+      <div class="row"><button class="btn" id="np-send"><i data-lucide="rocket"></i> Projekt starten</button>
+        <select id="np-tpl" style="width:auto;margin:0"><option value="">— oder Vorlage —</option></select>
+        <button class="btn ghost" id="np-tplgo">aus Vorlage</button></div>
     </div>
     <div class="card"><h3><i data-lucide="folder-kanban"></i> Laufende Projekte</h3>
       ${projects.length ? projects.map(p => `<div class="agent-row">
@@ -532,6 +569,15 @@ async function renderProjects() {
   document.getElementById("np-send").onclick = async () => {
     const t = document.getElementById("np-title").value.trim(); if (!t) return;
     await api.post("/api/projects", { title: t, description: document.getElementById("np-desc").value });
+    renderProjects();
+  };
+  const tpls = await api.get("/api/templates");
+  const sel = document.getElementById("np-tpl");
+  sel.innerHTML = `<option value="">— oder Vorlage —</option>` + tpls.map(t => `<option value="${t.key}">${esc(t.title)} (${t.milestones.length} Schritte)</option>`).join("");
+  document.getElementById("np-tplgo").onclick = async () => {
+    const key = sel.value; if (!key) return;
+    const title = document.getElementById("np-title").value.trim() || sel.options[sel.selectedIndex].text;
+    await api.post("/api/projects/from-template", { template: key, title, description: document.getElementById("np-desc").value });
     renderProjects();
   };
 }
@@ -925,6 +971,7 @@ async function renderSettings() {
       ${secField(sec, "ANTHROPIC_API_KEY", "Anthropic / Claude API-Key")}
       ${secField(sec, "OPENAI_API_KEY", "OpenAI API-Key")}
       ${secField(sec, "BRAVE_API_KEY", "Brave Search API-Key (optional)")}
+      ${secField(sec, "GITHUB_TOKEN", "GitHub Token (für Repo/Push)")}
       <hr style="border-color:var(--border);margin:12px 0"/>
       <div class="stat-label" style="margin-bottom:6px">E-Mail senden (SMTP)</div>
       ${secField(sec, "SMTP_HOST", "SMTP-Server (z. B. smtp.gmail.com)")}

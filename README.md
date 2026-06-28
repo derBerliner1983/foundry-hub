@@ -90,6 +90,12 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.tls.yml up -d
 `--proxy-headers`, erkennt also HTTPS hinter dem Proxy und setzt das Session-
 Cookie dann als `Secure`.)
 
+**Eigener Reverse-Proxy (z. B. Pangolin/Newt, Traefik, Caddy):** Den mitgelieferten
+nginx brauchst du dann **nicht** – starte einfach normal mit `docker compose up`
+(App auf Port **8000**) und richte deinen Proxy auf diesen Port. Da die App die
+`X-Forwarded-Proto`-Header auswertet, wird das Cookie hinter deinem HTTPS-Proxy
+automatisch als `Secure` gesetzt.
+
 > **Läuft auch ohne API-Keys.** Ohne Schlüssel antworten die Agenten über den
 > eingebauten **Mock-Provider** (Demo-Verhalten), sodass du den kompletten Ablauf
 > ausprobieren kannst. Für echte Modelle `ANTHROPIC_API_KEY` und/oder
@@ -296,6 +302,22 @@ Unter *Einstellungen → Zeitplan* legst du fest, **wann** die Agenten aktiv wer
 
 Der Status oben rechts zeigt den aktuellen Modus (läuft / Zeitfenster / manuell /
 pausiert). Der Hauptschalter *Agenten laufen automatisch* pausiert alles.
+
+### Ergebnisse rausbringen & weitere Automatik
+
+- **GitHub-Integration** – mit einem **GitHub-Token** (Zugangsdaten) legen Agenten
+  bzw. du ein Repo an und **pushen den Projekt-Workspace** (Button „GitHub" in der
+  Werkstatt; Agenten-Aktion `github_push`).
+- **Ein-Klick-Deploy** – pro Projekt ein **Deploy-Befehl** hinterlegbar
+  (`flyctl deploy`, `rsync …`, `docker build/push` …); Button „Deploy" bzw.
+  Agenten-Aktion `deploy` führt ihn im Sandbox-Container aus.
+- **Projekt-Vorlagen** – Blueprints (Landingpage, Web-App, Report, Automatisierung)
+  legen ein Projekt **mit passenden Meilensteinen** an.
+- **Freigaben per Telegram** – Benachrichtigungen zu Freigaben enthalten eine ID;
+  du antwortest dem Bot mit `/ja <id>` oder `/nein <id>` und gibst riskante Befehle
+  oder Einstellungen **von unterwegs** frei.
+- **E-Mail → Auftrag** – im Daily-Assistenten machst du aus einer E-Mail mit einem
+  Klick eine Einzelaufgabe an die Firma.
 
 ### Mehr Qualität & Automatisierung
 
