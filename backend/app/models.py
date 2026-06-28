@@ -221,6 +221,16 @@ class Decision(Base):
     created_at = Column(DateTime, default=now)
 
 
+class Secret(Base):
+    """Zugangsdaten, die der Nutzer in der GUI setzt (statt .env).
+    Werte werden nie an die Oberfläche zurückgegeben, nur der Status."""
+    __tablename__ = "secrets"
+
+    key = Column(String, primary_key=True)
+    value = Column(Text, default="")
+    updated_at = Column(DateTime, default=now, onupdate=now)
+
+
 class Event(Base):
     """Aktivitäts-Log für die Timeline."""
     __tablename__ = "events"

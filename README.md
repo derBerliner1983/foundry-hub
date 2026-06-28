@@ -300,6 +300,16 @@ exakt dieselbe Aktion, erkennt das System die **Endlosschleife automatisch**,
 in *Team/Org* mit „⚠️ Schleife". Per **Fortsetzen** (oder einer Nachricht an den
 Agenten) läuft er weiter – so verbrennt eine festhängende KI keine Endlos-Runden.
 
+## Zugangsdaten in der GUI (keine .env nötig)
+
+Du musst **nichts in die `.env`** schreiben: API-Keys (Claude/OpenAI/Brave) und
+die E-Mail-Server (SMTP/IMAP) lassen sich direkt unter *Einstellungen →
+Zugangsdaten* eingeben. Das System **erkennt automatisch**, was konfiguriert ist
+(Quelle `gui` oder `env`) und nimmt GUI-Werte vorrangig. Gespeicherte Werte
+werden aus Sicherheitsgründen **nie wieder angezeigt** (nur der Status), und
+gesetzte Keys greifen **sofort ohne Neustart**. Die `.env` funktioniert weiterhin
+als Alternative – beides geht.
+
 ## Konfiguration (.env)
 
 | Variable | Standard | Bedeutung |

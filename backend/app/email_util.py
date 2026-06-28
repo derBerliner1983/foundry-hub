@@ -5,33 +5,36 @@ import smtplib
 from email.header import decode_header, make_header
 from email.message import EmailMessage
 
-from .config import config
+from . import secrets
 
 
 def smtp_configured() -> bool:
-    return bool(config.SMTP_HOST and config.SMTP_FROM)
+    c = secrets.smtp_conf()
+    return bool(c["host"] and c["from"])
 
 
 def imap_configured() -> bool:
-    return bool(config.IMAP_HOST and config.IMAP_USER and config.IMAP_PASS)
+    c = secrets.imap_conf()
+    return bool(c["host"] and c["user"] and c["password"])
 
 
 def send_email(to: str, subject: str, body: str) -> dict:
-    if not smtp_configured():
+    c = secrets.smtp_conf()
+    if not (c["host"] and c["from"]):
         return {"ok": False, "error": "SMTP nicht konfiguriert"}
     if not to:
         return {"ok": False, "error": "Kein Empfänger"}
     msg = EmailMessage()
-    msg["From"] = config.SMTP_FROM
+    msg["From"] = c["from"]
     msg["To"] = to
     msg["Subject"] = subject
     msg.set_content(body or "")
     try:
-        with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=30) as s:
-            if config.SMTP_STARTTLS:
+        with smtplib.SMTP(c["host"], c["port"], timeout=30) as s:
+            if c["starttls"]:
                 s.starttls()
-            if config.SMTP_USER:
-                s.login(config.SMTP_USER, config.SMTP_PASS)
+            if c["user"]:
+                s.login(c["user"], c["password"])
             s.send_message(msg)
         return {"ok": True}
     except Exception as e:  # noqa: BLE001
@@ -66,12 +69,13 @@ def _body_text(msg) -> str:
 
 def fetch_recent(limit: int = 10) -> dict:
     """Liest die neuesten E-Mails aus der INBOX."""
-    if not imap_configured():
+    c = secrets.imap_conf()
+    if not (c["host"] and c["user"] and c["password"]):
         return {"ok": False, "error": "IMAP nicht konfiguriert", "emails": []}
     try:
-        cls = imaplib.IMAP4_SSL if config.IMAP_SSL else imaplib.IMAP4
-        M = cls(config.IMAP_HOST, config.IMAP_PORT)
-        M.login(config.IMAP_USER, config.IMAP_PASS)
+        cls = imaplib.IMAP4_SSL if c["ssl"] else imaplib.IMAP4
+        M = cls(c["host"], c["port"])
+        M.login(c["user"], c["password"])
         M.select("INBOX")
         typ, data = M.search(None, "ALL")
         ids = data[0].split()

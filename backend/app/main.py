@@ -14,6 +14,7 @@ from . import mcp_client
 from . import ollama_admin
 from . import orchestrator as orch
 from . import providers
+from . import secrets as secrets_mod
 from . import workspace
 from .config import config
 from .database import Base, SessionLocal, engine
@@ -51,6 +52,7 @@ async def startup():
         ensure_seed(db)
     finally:
         db.close()
+    secrets_mod.apply_to_environ()  # GUI-Zugangsdaten für Subprozesse verfügbar machen
     asyncio.create_task(orchestrator_loop())
     asyncio.create_task(_startup_ollama())
     asyncio.create_task(_startup_mcp())
@@ -221,6 +223,27 @@ class UserRating(BaseModel):
 @app.get("/api/health")
 def health():
     return {"status": "ok", "providers": providers.available_providers()}
+
+
+@app.get("/api/secrets")
+def get_secrets():
+    """Status aller Zugangsdaten (nie die Werte selbst)."""
+    return secrets_mod.status()
+
+
+@app.post("/api/secrets")
+def set_secrets(values: dict):
+    """Setzt Zugangsdaten aus der GUI. Leerer Wert = unverändert lassen.
+    Wert '__CLEAR__' = löschen (wieder auf .env/Default zurückfallen)."""
+    for key, val in values.items():
+        if key not in secrets_mod.KEYS:
+            continue
+        if val == "__CLEAR__":
+            secrets_mod.set_value(key, "")
+        elif val not in (None, ""):
+            secrets_mod.set_value(key, str(val))
+    secrets_mod.apply_to_environ()
+    return {"ok": True, "status": secrets_mod.status()}
 
 
 @app.post("/api/run-now")

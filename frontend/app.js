@@ -19,6 +19,15 @@ let progProject = "";
 function icons() { window.lucide && lucide.createIcons(); }
 function esc(s) { return (s || "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
 function initials(n) { return (n || "?").split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase(); }
+function secField(sec, key, label) {
+  const st = sec[key] || { configured: false, source: "none", secret: false };
+  const badge = st.configured
+    ? `<span class="pill employed">✓ ${st.source}</span>`
+    : `<span class="pill resigned">nicht gesetzt</span>`;
+  const ph = st.configured ? "•••• gesetzt – neu eingeben zum Ändern" : "eintragen …";
+  return `<label>${label} ${badge}</label>
+    <input data-secret="${key}" type="${st.secret ? 'password' : 'text'}" autocomplete="off" placeholder="${ph}"/>`;
+}
 
 // ---------- Navigation ----------
 document.querySelectorAll(".nav-item").forEach(el => {
@@ -684,6 +693,7 @@ async function renderActivity() {
 // ---------- Settings ----------
 async function renderSettings() {
   const s = await api.get("/api/settings");
+  const sec = await api.get("/api/secrets");
   const provOpts = (sel) => ["claude", "openai", "ollama"].map(p => `<option ${sel === p ? "selected" : ""} value="${p}">${p}${s.providers_available[p] ? "" : " (kein Key → Mock)"}</option>`).join("");
   const autoOpts = { full: "Voll autonom (keine Rückfragen)", ask_for_hiring: "Nachfragen bei Einstellung/Kündigung", ask_for_everything: "Bei allem Wichtigen nachfragen" };
   const schedOpts = { always: "Dauerbetrieb (immer)", window: "Nur in einem Zeitfenster", manual: "Nur manuell (auf Knopfdruck)" };
@@ -726,6 +736,27 @@ async function renderSettings() {
     <div class="card" style="margin-top:16px"><h3><i data-lucide="plug"></i> Provider-Status</h3>
       ${Object.entries(s.providers_available).map(([k, v]) => `<span class="pill ${v ? "employed" : "resigned"}" style="margin-right:8px">${k}: ${v ? "verfügbar" : "Mock"}</span>`).join("")}
     </div>
+    <div class="card" style="margin-top:16px"><h3><i data-lucide="key-round"></i> Zugangsdaten (direkt hier – keine .env nötig)</h3>
+      <div class="tag" style="margin-bottom:10px">Leeres Feld = unverändert. Gespeicherte Werte werden aus Sicherheitsgründen nicht angezeigt. Quelle: <b>gui</b> = hier gesetzt, <b>env</b> = aus .env erkannt.</div>
+      ${secField(sec, "ANTHROPIC_API_KEY", "Anthropic / Claude API-Key")}
+      ${secField(sec, "OPENAI_API_KEY", "OpenAI API-Key")}
+      ${secField(sec, "BRAVE_API_KEY", "Brave Search API-Key (optional)")}
+      <hr style="border-color:var(--border);margin:12px 0"/>
+      <div class="stat-label" style="margin-bottom:6px">E-Mail senden (SMTP)</div>
+      ${secField(sec, "SMTP_HOST", "SMTP-Server (z. B. smtp.gmail.com)")}
+      ${secField(sec, "SMTP_PORT", "SMTP-Port (z. B. 587)")}
+      ${secField(sec, "SMTP_USER", "SMTP-Benutzer / E-Mail")}
+      ${secField(sec, "SMTP_PASS", "SMTP-Passwort / App-Passwort")}
+      ${secField(sec, "SMTP_FROM", "Absender-Adresse (optional)")}
+      <hr style="border-color:var(--border);margin:12px 0"/>
+      <div class="stat-label" style="margin-bottom:6px">E-Mail lesen (IMAP) – für den Assistenten</div>
+      ${secField(sec, "IMAP_HOST", "IMAP-Server (z. B. imap.gmail.com)")}
+      ${secField(sec, "IMAP_PORT", "IMAP-Port (z. B. 993)")}
+      ${secField(sec, "IMAP_USER", "IMAP-Benutzer (leer = wie SMTP)")}
+      ${secField(sec, "IMAP_PASS", "IMAP-Passwort (leer = wie SMTP)")}
+      <button class="btn" id="sec-save"><i data-lucide="save"></i> Zugangsdaten speichern</button>
+      <span class="muted" id="sec-status" style="margin-left:8px"></span>
+    </div>
     <div class="card" style="margin-top:16px"><h3><i data-lucide="mail"></i> E-Mail & Benachrichtigungen</h3>
       <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:10px">
         <span class="pill ${s.email_status.smtp ? 'employed' : 'resigned'}">SMTP (senden): ${s.email_status.smtp ? 'konfiguriert' : 'fehlt (.env)'}</span>
@@ -758,6 +789,17 @@ async function renderSettings() {
     toggles[id] = el.querySelector(".switch").classList.contains("on");
     el.onclick = () => { const sw = el.querySelector(".switch"); sw.classList.toggle("on"); toggles[id] = sw.classList.contains("on"); };
   });
+  // Zugangsdaten speichern (nur ausgefüllte Felder)
+  document.getElementById("sec-save").onclick = async () => {
+    const payload = {};
+    document.querySelectorAll("[data-secret]").forEach(inp => {
+      if (inp.value.trim() !== "") payload[inp.dataset.secret] = inp.value.trim();
+    });
+    if (Object.keys(payload).length === 0) { document.getElementById("sec-status").textContent = "nichts geändert"; return; }
+    await api.post("/api/secrets", payload);
+    document.getElementById("sec-status").textContent = "✓ gespeichert";
+    setTimeout(renderSettings, 600);
+  };
   // Zeitplan: Fenster ein-/ausblenden + Jetzt prüfen
   document.getElementById("s-sched").onchange = e => {
     document.getElementById("s-window").style.display = e.target.value === "window" ? "" : "none";

@@ -1,6 +1,7 @@
 """OpenAI Provider (Chat Completions, REST)."""
 import httpx
 
+from .. import secrets
 from ..config import config
 from .base import BaseProvider, LLMResult, MockProvider
 
@@ -9,7 +10,7 @@ class OpenAIProvider(BaseProvider):
     name = "openai"
 
     def available(self) -> bool:
-        return bool(config.OPENAI_API_KEY)
+        return bool(secrets.provider_key("openai"))
 
     async def chat(self, model: str, system: str, messages: list) -> LLMResult:
         if not self.available():
@@ -19,7 +20,7 @@ class OpenAIProvider(BaseProvider):
 
         url = f"{config.OPENAI_BASE_URL}/v1/chat/completions"
         headers = {
-            "Authorization": f"Bearer {config.OPENAI_API_KEY}",
+            "Authorization": f"Bearer {secrets.provider_key('openai')}",
             "content-type": "application/json",
         }
         full = [{"role": "system", "content": system}] + messages
