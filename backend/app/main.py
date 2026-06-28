@@ -236,6 +236,7 @@ class SettingsUpdate(BaseModel):
     require_approval_fire: bool | None = None
     fire_threshold: float | None = None
     enable_code_exec: bool | None = None
+    budget_limit: float | None = None
     thinking_mode: str | None = None
     require_verification: bool | None = None
     incremental_mode: bool | None = None
@@ -784,6 +785,7 @@ def get_settings():
             "require_approval_fire": s.require_approval_fire,
             "fire_threshold": s.fire_threshold,
             "enable_code_exec": s.enable_code_exec,
+            "budget_limit": s.budget_limit,
             "thinking_mode": s.thinking_mode,
             "require_verification": s.require_verification,
             "incremental_mode": s.incremental_mode,
@@ -810,10 +812,38 @@ def update_settings(upd: SettingsUpdate):
     db = SessionLocal()
     try:
         s = orch.get_settings(db)
-        for field, value in upd.model_dump(exclude_none=True).items():
+        data = upd.model_dump(exclude_none=True)
+        if "budget_limit" in data:
+            s.budget_notified = False  # bei neuem Budget Pausierung aufheben
+        for field, value in data.items():
             setattr(s, field, value)
         db.commit()
         return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.get("/api/budget")
+def budget():
+    """Verbrauch (USD) der aktuellen Firma – gesamt, je Modell, je Projekt."""
+    from .models import Usage
+    db = SessionLocal()
+    try:
+        s = orch.get_settings(db)
+        rows = db.query(Usage).filter(Usage.tenant_id == context.tid()).all()
+        total = round(sum(r.cost for r in rows), 4)
+        in_tok = sum(r.input_tokens for r in rows)
+        out_tok = sum(r.output_tokens for r in rows)
+        by_model = {}
+        for r in rows:
+            by_model.setdefault(r.model, 0.0)
+            by_model[r.model] += r.cost
+        return {"spent": total, "limit": s.budget_limit or 0.0,
+                "input_tokens": in_tok, "output_tokens": out_tok,
+                "calls": len(rows),
+                "by_model": [{"model": k, "cost": round(v, 4)} for k, v in
+                             sorted(by_model.items(), key=lambda x: -x[1])],
+                "paused": bool(s.budget_limit and total >= s.budget_limit > 0)}
     finally:
         db.close()
 

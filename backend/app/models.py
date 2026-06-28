@@ -80,6 +80,9 @@ class Settings(Base):
     active_from = Column(Integer, default=0)           # Stunde 0..23 (Fenster-Start)
     active_to = Column(Integer, default=24)            # Stunde 0..24 (Fenster-Ende)
     tick_seconds = Column(Float, default=4.0)          # Takt des Orchestrators
+    # Budget (USD); 0 = unbegrenzt. Bei Überschreitung pausiert die Firma.
+    budget_limit = Column(Float, default=0.0)
+    budget_notified = Column(Boolean, default=False)
     # Arbeitsweise der Agenten
     thinking_mode = Column(String, default="think")    # off | think | deep
     require_verification = Column(Boolean, default=True)  # erst prüfen, dann "fertig"
@@ -269,6 +272,22 @@ class Decision(Base):
     thoughts = Column(Text, default="")          # warum (Begründung des Agenten)
     actions_summary = Column(Text, default="")   # was/wie (durchgeführte Aktionen)
     trigger = Column(Text, default="")           # worauf reagiert wurde
+    created_at = Column(DateTime, default=now)
+
+
+class Usage(Base):
+    """Token-/Kostenverbrauch je LLM-Aufruf (für Budget-Kontrolle)."""
+    __tablename__ = "usage"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, default=_default_tenant, index=True)
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
+    provider = Column(String, default="")
+    model = Column(String, default="")
+    input_tokens = Column(Integer, default=0)
+    output_tokens = Column(Integer, default=0)
+    cost = Column(Float, default=0.0)
     created_at = Column(DateTime, default=now)
 
 

@@ -88,6 +88,7 @@ window.answerQuestion = async (qid, senderAgentId) => {
 
 async function renderDashboard() {
   const d = await api.get("/api/dashboard");
+  const bud = await api.get("/api/budget");
   const s = d.stats;
   const tile = (label, val, view, color) => `<div class="card" style="cursor:pointer" onclick="goView('${view}')">
     <div class="stat-label">${label}</div><div class="stat" style="color:${color || 'var(--text)'}">${val}</div></div>`;
@@ -100,6 +101,7 @@ async function renderDashboard() {
       ${tile("Offene Rückfragen", s.open_questions, "inbox", s.open_questions ? "var(--yellow)" : "var(--text)")}
       ${tile("Freigaben", s.pending_approvals, "approvals", s.pending_approvals ? "var(--yellow)" : "var(--text)")}
       ${tile("Überfällig", s.overdue, "progress", s.overdue ? "var(--red)" : "var(--text)")}
+      ${tile(bud.paused ? "Budget (pausiert!)" : "Kosten (USD)", "$" + bud.spent.toFixed(2), "settings", bud.paused ? "var(--red)" : "var(--text)")}
     </div>
 
     ${s.overdue ? `<div class="card" style="margin-bottom:16px;border-color:var(--red)">
@@ -712,6 +714,7 @@ async function renderActivity() {
 async function renderSettings() {
   const s = await api.get("/api/settings");
   const sec = await api.get("/api/secrets");
+  const bud = await api.get("/api/budget");
   const provOpts = (sel) => ["claude", "openai", "ollama"].map(p => `<option ${sel === p ? "selected" : ""} value="${p}">${p}${s.providers_available[p] ? "" : " (kein Key → Mock)"}</option>`).join("");
   const autoOpts = { full: "Voll autonom (keine Rückfragen)", ask_for_hiring: "Nachfragen bei Einstellung/Kündigung", ask_for_everything: "Bei allem Wichtigen nachfragen" };
   const schedOpts = { always: "Dauerbetrieb (immer)", window: "Nur in einem Zeitfenster", manual: "Nur manuell (auf Knopfdruck)" };
@@ -746,6 +749,18 @@ async function renderSettings() {
       <div class="row" style="margin-top:8px"><div class="toggle" id="s-verify"><div class="switch ${s.require_verification ? 'on' : ''}"></div> <b>Vor „fertig" verifizieren</b> (Entwickler/QA müssen testen – keine Regressionen)</div></div>
       <div class="row" style="margin-top:8px"><div class="toggle" id="s-incr"><div class="switch ${s.incremental_mode ? 'on' : ''}"></div> Kleine Teilschritte & minimaler Code (nicht alles auf einmal)</div></div>
       <div class="tag" style="margin-top:8px">Ist „verifizieren" an, blockiert das System den Abschluss einer Entwickler-/QA-Aufgabe, bis ein Test/Smoke-Check erfolgreich lief.</div>
+    </div>
+    <div class="card" style="margin-bottom:14px"><h3><i data-lucide="wallet"></i> Budget & Kosten ${bud.paused ? '<span class="pill fired">pausiert</span>' : ''}</h3>
+      <div class="row" style="gap:18px;margin-bottom:10px">
+        <div><div class="stat-label">Verbraucht</div><div class="stat">$${bud.spent.toFixed(4)}</div></div>
+        <div><div class="stat-label">Tokens (ein/aus)</div><div class="stat" style="font-size:18px">${bud.input_tokens}/${bud.output_tokens}</div></div>
+        <div><div class="stat-label">Aufrufe</div><div class="stat" style="font-size:18px">${bud.calls}</div></div>
+      </div>
+      ${bud.limit > 0 ? bar(Math.min(100, Math.round(100 * bud.spent / bud.limit)), bud.paused ? 'var(--red)' : 'var(--accent)') : ''}
+      <label style="margin-top:10px">Budget-Limit in USD (0 = unbegrenzt) – bei Überschreitung pausiert die Firma automatisch</label>
+      <input id="s-budget" type="number" min="0" step="1" value="${bud.limit}"/>
+      ${bud.by_model.length ? `<div class="stat-label" style="margin-top:6px">Je Modell</div>` + bud.by_model.map(m => `<div class="row"><small style="flex:1">${esc(m.model)}</small><small>$${m.cost.toFixed(4)}</small></div>`).join("") : ''}
+      <div class="tag" style="margin-top:8px">Kosten sind Schätzungen (lokale Modelle = $0). Budget erhöhen hebt eine Pausierung wieder auf.</div>
     </div>
     <div class="grid cols-2">
       <div class="card"><h3><i data-lucide="sliders"></i> Autonomie & Freigaben</h3>
@@ -860,6 +875,7 @@ async function renderSettings() {
       enable_code_exec: toggles["s-code"],
       thinking_mode: document.getElementById("s-think").value,
       require_verification: toggles["s-verify"], incremental_mode: toggles["s-incr"],
+      budget_limit: parseFloat(document.getElementById("s-budget").value || "0"),
       schedule_mode: document.getElementById("s-sched").value,
       tick_seconds: parseFloat(document.getElementById("s-tick").value),
       active_from: parseInt(document.getElementById("s-from").value || "0"),

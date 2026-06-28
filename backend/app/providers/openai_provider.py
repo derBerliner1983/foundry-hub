@@ -31,7 +31,10 @@ class OpenAIProvider(BaseProvider):
                 r.raise_for_status()
                 data = r.json()
                 text = data["choices"][0]["message"]["content"]
-                return LLMResult(text, self.name, model)
+                u = data.get("usage", {})
+                return LLMResult(text, self.name, model,
+                                 input_tokens=u.get("prompt_tokens", 0),
+                                 output_tokens=u.get("completion_tokens", 0))
         except Exception as e:  # noqa: BLE001
             if config.ALLOW_MOCK_FALLBACK:
                 return await MockProvider().chat(model, system, messages)

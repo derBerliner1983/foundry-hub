@@ -5,6 +5,7 @@ import re
 from sqlalchemy import func, or_
 
 from . import context
+from . import costs
 from . import email_util
 from . import mcp_client
 from . import providers
@@ -23,6 +24,7 @@ from .models import (
     Settings,
     Skill,
     Task,
+    Usage,
 )
 from .prompts import build_system_prompt
 from .roles import ROLES, can_hire, role_title
@@ -740,6 +742,14 @@ async def run_agent_turn(db, agent: Agent):
 
     result = await providers.chat(agent.provider, agent.model, system,
                                   [{"role": "user", "content": user_msg}])
+    # Verbrauch/Kosten protokollieren
+    cost = costs.estimate(result.model, result.input_tokens, result.output_tokens)
+    if result.input_tokens or result.output_tokens or not result.ok:
+        db.add(Usage(tenant_id=agent.tenant_id, agent_id=agent.id, project_id=project_ctx,
+                     provider=result.provider, model=result.model,
+                     input_tokens=result.input_tokens, output_tokens=result.output_tokens,
+                     cost=cost))
+        db.commit()
     if not result.ok:
         log(db, "error", f"{agent.name}: LLM-Fehler {result.error}", agent_id=agent.id)
         db.commit()
@@ -844,13 +854,37 @@ def within_schedule(settings) -> bool:
     return True  # always
 
 
+def tenant_spend(db, tenant_id) -> float:
+    val = db.query(func.sum(Usage.cost)).filter(Usage.tenant_id == tenant_id).scalar()
+    return round(val or 0.0, 4)
+
+
+def _over_budget(db, s) -> bool:
+    if not s.budget_limit or s.budget_limit <= 0:
+        return False
+    spent = tenant_spend(db, s.tenant_id)
+    if spent >= s.budget_limit:
+        if not s.budget_notified:
+            s.budget_notified = True
+            context.set_tenant(s.tenant_id)
+            log(db, "info", f"💸 Budget erreicht ({spent:.2f}/{s.budget_limit:.2f} USD) – Firma pausiert.")
+            maybe_notify(db, "question", "Budget erreicht – Firma pausiert",
+                         f"Verbrauch {spent:.2f} USD von {s.budget_limit:.2f} USD. "
+                         "Erhöhe das Budget in den Einstellungen, um fortzufahren.")
+            db.commit()
+        return True
+    return False
+
+
 def _active_tenants(db, force=False, only_tenant=None) -> list:
-    """Firmen, deren KI gerade arbeiten darf (auto_run + Zeitplan)."""
+    """Firmen, deren KI gerade arbeiten darf (auto_run + Zeitplan + Budget)."""
     q = db.query(Settings)
     if only_tenant is not None:
         q = q.filter(Settings.tenant_id == only_tenant)
     out = []
     for s in q.all():
+        if _over_budget(db, s):
+            continue
         if force or (s.auto_run and within_schedule(s)):
             out.append(s.tenant_id)
     return out
