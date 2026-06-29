@@ -1132,12 +1132,22 @@ async function renderSettings() {
       <div class="tag" style="margin-top:4px">Zugangsdaten (SMTP/IMAP) trägst du oben unter „Zugangsdaten" ein.</div>
     </div>
     <div class="card" style="margin-top:16px"><h3><i data-lucide="server"></i> Lokale Modelle (Ollama)</h3>
+      <label>Ollama-Server-URL (z. B. eigene Instanz: http://host.docker.internal:11434)</label>
+      <div class="row" style="margin-bottom:10px"><input id="ol-url" placeholder="http://host.docker.internal:11434" style="margin:0"/>
+        <button class="btn sm" id="ol-url-save"><i data-lucide="plug"></i> Verbinden</button>
+        <span class="muted" id="ol-conn"></span></div>
       <div class="row" style="margin-bottom:10px"><input id="ol-name" placeholder="Modell ziehen, z. B. llama3.1" style="margin:0"/>
         <button class="btn sm" id="ol-pull"><i data-lucide="download"></i> Ziehen</button></div>
       <div id="ol-list"><div class="muted">lade …</div></div>
     </div>`;
   icons();
   loadOllama();
+  document.getElementById("ol-url-save").onclick = async () => {
+    const u = document.getElementById("ol-url").value.trim();
+    await api.post("/api/secrets", { OLLAMA_BASE_URL: u });
+    document.getElementById("ol-conn").textContent = "gespeichert – prüfe …";
+    loadOllama();
+  };
   document.getElementById("ol-pull").onclick = async () => {
     const n = document.getElementById("ol-name").value.trim(); if (!n) return;
     document.getElementById("ol-pull").textContent = "lädt …";
@@ -1281,7 +1291,13 @@ async function loadOllama() {
   const el = document.getElementById("ol-list");
   if (!el) return;
   const st = await api.get("/api/ollama/status");
-  if (!st.reachable) { el.innerHTML = `<div class="muted">Ollama nicht erreichbar (Container aus?).</div>`; return; }
+  const urlIn = document.getElementById("ol-url");
+  if (urlIn && document.activeElement !== urlIn) urlIn.value = st.base_url || "";
+  const conn = document.getElementById("ol-conn");
+  if (conn) conn.innerHTML = st.reachable
+    ? `<span style="color:var(--green)">✓ verbunden (${st.models.length} Modelle)</span>`
+    : `<span style="color:var(--yellow)">✕ nicht erreichbar</span>`;
+  if (!st.reachable) { el.innerHTML = `<div class="muted">Ollama unter <code>${esc(st.base_url || '')}</code> nicht erreichbar. URL prüfen – oder Host-Ollama auf 0.0.0.0 lauschen lassen.</div>`; return; }
   if (!st.models.length) { el.innerHTML = `<div class="muted">Keine lokalen Modelle. Oben eines ziehen.</div>`; return; }
   el.innerHTML = st.models.map(m => `<div class="agent-row" style="padding:9px 11px">
       <i data-lucide="box" style="width:18px"></i>

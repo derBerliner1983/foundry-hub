@@ -435,7 +435,7 @@ höheres Limit hebt die Pause wieder auf. Eine Kosten-Kachel steht im Dashboard.
 | Datenbank | SQLite (Standard) – oder **PostgreSQL** via `DATABASE_URL` |
 | LLM-Provider | Claude · OpenAI · Ollama · OpenRouter · Mistral · Gemini · Mock (austauschbar, reines REST, mit Fallback-Kette) |
 | Frontend | Vanilla JS + eigenes Design-System (Dark-Dashboard, lucide-Icons) |
-| Betrieb | Docker Compose (App + Sandbox + Ollama; optional PostgreSQL) |
+| Betrieb | Docker Compose (App + Sandbox; Ollama & PostgreSQL optional als Profil) |
 | Sicherheit | Login + 2FA, verschlüsselte Zugangsdaten, Sitzungsverwaltung, Rate-Limit, optionale IP-Allowlist |
 
 ```
@@ -516,8 +516,8 @@ als Alternative – beides geht.
 | `SMTP_HOST`/`_PORT`/`_USER`/`_PASS`/`_FROM` | – | E-Mail senden (Benachrichtigungen & Assistent) |
 | `IMAP_HOST`/`_PORT`/`_USER`/`_PASS` | – | E-Mail lesen (Daily-Assistent) |
 | `NOTIFY_EMAIL` | – | Ziel für Benachrichtigungen (sonst in der App setzbar) |
-| `OLLAMA_BASE_URL` | `http://ollama:11434` | Lokaler Ollama-Server |
-| `OLLAMA_AUTO_MODEL` | `llama3.2:1b` | Beim Start ziehen – nur falls kein Modell vorhanden (leer = nie) |
+| `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Ollama-Server. Standard zeigt auf eine **vorhandene Host-Instanz**; für den mitgelieferten Container `http://ollama:11434`. Auch in der GUI änderbar. |
+| `OLLAMA_AUTO_MODEL` | – (leer) | Beim Start ziehen – nur falls kein Modell vorhanden (leer = nie) |
 | `DEFAULT_CHEF_PROVIDER` / `_MODEL` | `claude` / `claude-opus-4-8` | Standardmodell des Chefs |
 | `DEFAULT_WORKER_PROVIDER` / `_MODEL` | `claude` / `claude-sonnet-4-6` | Standardmodell der Mitarbeiter |
 | `ALLOW_MOCK_FALLBACK` | `true` | Ohne Key/bei Fehler antwortet der Mock |

@@ -14,6 +14,7 @@ KEYS = [
     "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "BRAVE_API_KEY", "GITHUB_TOKEN",
     "OPENROUTER_API_KEY", "MISTRAL_API_KEY", "GEMINI_API_KEY",
     "SLACK_WEBHOOK", "DISCORD_WEBHOOK",
+    "OLLAMA_BASE_URL",
     "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "SMTP_FROM", "SMTP_STARTTLS",
     "IMAP_HOST", "IMAP_PORT", "IMAP_USER", "IMAP_PASS", "IMAP_SSL",
 ]
@@ -94,6 +95,11 @@ def source(key: str) -> str:
 # --------------------------------------------------------------------------- #
 # Bequeme Sammel-Accessoren
 # --------------------------------------------------------------------------- #
+def ollama_url() -> str:
+    """Ollama-Server-URL: GUI-Wert, sonst Env/Config-Default."""
+    return get("OLLAMA_BASE_URL") or config.OLLAMA_BASE_URL
+
+
 def provider_key(name: str) -> str:
     return {"anthropic": get("ANTHROPIC_API_KEY"),
             "openai": get("OPENAI_API_KEY"),

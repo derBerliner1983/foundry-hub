@@ -15,7 +15,7 @@ def available() -> bool:
     if secrets.provider_key("openai"):
         return True
     try:
-        httpx.get(f"{config.OLLAMA_BASE_URL}/api/tags", timeout=3)
+        httpx.get(f"{secrets.ollama_url()}/api/tags", timeout=3)
         return True
     except Exception:  # noqa: BLE001
         return False
@@ -37,7 +37,7 @@ def embed(text: str):
         except Exception:  # noqa: BLE001
             pass
     try:
-        r = httpx.post(f"{config.OLLAMA_BASE_URL}/api/embeddings",
+        r = httpx.post(f"{secrets.ollama_url()}/api/embeddings",
                        json={"model": "nomic-embed-text", "prompt": text}, timeout=30)
         r.raise_for_status()
         v = r.json().get("embedding")

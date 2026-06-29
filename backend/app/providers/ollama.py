@@ -1,7 +1,7 @@
 """Ollama Provider für lokale Modelle."""
 import httpx
 
-from ..config import config
+from .. import secrets
 from .base import BaseProvider, LLMResult, MockProvider
 
 
@@ -13,7 +13,7 @@ class OllamaProvider(BaseProvider):
         return True
 
     async def chat(self, model: str, system: str, messages: list) -> LLMResult:
-        url = f"{config.OLLAMA_BASE_URL}/api/chat"
+        url = f"{secrets.ollama_url()}/api/chat"
         full = [{"role": "system", "content": system}] + messages
         payload = {"model": model, "messages": full, "stream": False}
         try:
