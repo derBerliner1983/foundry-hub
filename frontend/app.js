@@ -30,12 +30,20 @@ function secField(sec, key, label) {
 }
 
 // ---------- Navigation ----------
+const appEl = document.querySelector(".app");
+function closeNav() { if (appEl) appEl.classList.remove("nav-open"); }
+const menuBtn = document.getElementById("menu-btn");
+if (menuBtn) menuBtn.addEventListener("click", () => appEl.classList.toggle("nav-open"));
+const navBackdrop = document.getElementById("nav-backdrop");
+if (navBackdrop) navBackdrop.addEventListener("click", closeNav);
+
 document.querySelectorAll(".nav-item").forEach(el => {
   el.addEventListener("click", () => {
     document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
     el.classList.add("active");
     currentView = el.dataset.view;
     titleEl.textContent = TITLES[currentView];
+    closeNav();  // auf Mobilgeräten Menü nach Auswahl schließen
     render();
   });
 });
