@@ -3,9 +3,28 @@
 Kurzanleitung zum Starten und Einrichten. Ausführliche Funktionsbeschreibung
 findest du in der [README](README.md).
 
-## 1. Starten
+## 0. Voraussetzungen
 
-Am einfachsten mit dem Skript (prüft Docker, legt `.env` an, baut & startet):
+- Ein Server/Rechner mit **Docker** und **Docker Compose** (Linux empfohlen).
+  Installation: <https://docs.docker.com/get-docker/>
+- Port **8000** muss frei sein (oder du legst deinen Reverse-Proxy davor).
+
+## 1. Herunterladen
+
+Per Git (empfohlen – so kannst du später einfach aktualisieren):
+
+```bash
+git clone https://github.com/derBerliner1983/Ai-hub.git
+cd Ai-hub
+```
+
+Ohne Git: auf GitHub **Code → Download ZIP**, auf den Server kopieren, entpacken
+und in den Ordner wechseln.
+
+## 2. Starten
+
+Am einfachsten mit dem Skript (prüft Docker, legt `.env` an, erzeugt einen
+`APP_SECRET_KEY`, baut & startet, optional HTTPS und lokales Modell):
 
 ```bash
 ./install.sh
@@ -14,17 +33,18 @@ Am einfachsten mit dem Skript (prüft Docker, legt `.env` an, baut & startet):
 Oder manuell:
 
 ```bash
-docker compose up --build
+cp .env.example .env        # einmalig
+docker compose up --build -d
 ```
 
-Danach im Browser öffnen: **http://localhost:8000**
+Danach im Browser öffnen: **http://SERVER-IP:8000** (lokal: http://localhost:8000)
 
-## 2. Owner-Konto anlegen
+## 3. Owner-Konto anlegen
 
 Beim **ersten Aufruf** legst du das Owner-Konto an (Benutzername + Passwort).
 Weitere Nutzer erstellst du später unter **Nutzer & Teilen** (nur der Owner darf das).
 
-## 3. Modelle & Zugänge einrichten (in der GUI, keine `.env` nötig)
+## 4. Modelle & Zugänge einrichten (in der GUI, keine `.env` nötig)
 
 *Einstellungen → Zugangsdaten*:
 
@@ -50,7 +70,7 @@ Weitere Nutzer erstellst du später unter **Nutzer & Teilen** (nur der Owner dar
 > festen `APP_SECRET_KEY` setzen – sonst wird einmalig ein Zufallsschlüssel unter
 > `/data/.aihub_key` erzeugt.
 
-## 4. Obsidian-Vault (optional, „Gehirn")
+## 5. Obsidian-Vault (optional, „Gehirn")
 
 In `docker-compose.yml` deinen Vault-Ordner einhängen und neu starten:
 
@@ -62,17 +82,21 @@ In `docker-compose.yml` deinen Vault-Ordner einhängen und neu starten:
 Agenten schreiben dann Notizen dorthin, du bearbeitest sie in Obsidian; die
 Wissenssuche bezieht sie ein (Ordner `AI-Hub/tenant_<id>/`).
 
-## 5. Öffentlich erreichbar (Pangolin/Newt, Traefik, Caddy …)
+## 6. Öffentlich erreichbar (Pangolin/Newt, Traefik, Caddy …)
 
 Den mitgelieferten nginx brauchst du **nicht**. Starte normal mit
-`docker compose up` (App auf **Port 8000**) und richte deinen Reverse-Proxy auf
+`docker compose up -d` (App auf **Port 8000**) und richte deinen Reverse-Proxy auf
 diesen Port. Da die App `X-Forwarded-Proto` auswertet, wird das Session-Cookie
 hinter deinem HTTPS-Proxy automatisch als `Secure` gesetzt.
 
 *(Wer doch den eingebauten nginx will: siehe `deploy/` und
 `docker compose -f docker-compose.yml -f deploy/docker-compose.tls.yml up -d`.)*
 
-## 6. Loslegen
+Die Container laufen mit `restart: unless-stopped`, starten also nach einem
+Server-Neustart automatisch wieder. Daten (DB, Workspaces, Vault) liegen in
+Docker-Volumes und bleiben erhalten.
+
+## 7. Loslegen
 
 1. **Dashboard / Inbox** öffnen und dem **Chef** einen Auftrag geben – als
    **Projekt** oder **Einzelaufgabe**, gern auch über eine **Projekt-Vorlage**.
@@ -89,7 +113,7 @@ hinter deinem HTTPS-Proxy automatisch als `Secure` gesetzt.
 6. Oben rechts: **globale Suche** über Projekte, Aufgaben, Nachrichten, Agenten,
    Regeln und Wissen.
 
-## 7. Wichtige Schalter (Einstellungen)
+## 8. Wichtige Schalter (Einstellungen)
 
 - **Arbeitsweise**: Denkmodus (aus/nachdenken/Tiefenrecherche), 4-Augen-Review,
   „erst testen, dann fertig" (keine Regressionen), kleine Teilschritte.
@@ -100,7 +124,7 @@ hinter deinem HTTPS-Proxy automatisch als `Secure` gesetzt.
 - **Konto & Sicherheit**: Passwort ändern, **2FA (TOTP)**, **angemeldete
   Sitzungen** ansehen/abmelden.
 
-## 8. Datensicherung
+## 9. Datensicherung
 
 *Einstellungen → Sicherung*:
 - **Vollständiges Backup (ZIP)** lädt DB-Snapshot, alle Projekt-Workspaces und
@@ -108,7 +132,7 @@ hinter deinem HTTPS-Proxy automatisch als `Secure` gesetzt.
 - **Automatische tägliche Sicherung** (mit Aufbewahrung von N Sicherungen) legt
   Backups unter `/data/backups` ab.
 
-## 9. Betrieb & Sicherheit (optional)
+## 10. Betrieb & Sicherheit (optional)
 
 - **PostgreSQL** statt SQLite: `docker compose --profile postgres up -d` und
   `DATABASE_URL=postgresql+psycopg://aihub:aihub@postgres:5432/aihub` setzen.
@@ -123,3 +147,16 @@ docker compose logs -f app     # Logs ansehen
 docker compose down            # stoppen
 docker compose up --build -d   # im Hintergrund starten
 ```
+
+## Aktualisieren
+
+Neue Version holen und neu bauen (Daten bleiben in den Volumes erhalten,
+fehlende DB-Spalten werden beim Start automatisch ergänzt):
+
+```bash
+git pull
+docker compose up --build -d
+```
+
+> Den **`APP_SECRET_KEY` in der `.env` unbedingt aufbewahren** – ohne ihn lassen
+> sich verschlüsselt gespeicherte Zugangsdaten (und Backups) nicht mehr lesen.

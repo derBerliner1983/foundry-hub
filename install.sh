@@ -39,6 +39,24 @@ else
   info ".env ist bereits vorhanden."
 fi
 
+# 2b) APP_SECRET_KEY sicherstellen (verschlüsselt gespeicherte Zugangsdaten,
+#     damit Backups portabel bleiben). Nur setzen, wenn noch leer/auskommentiert.
+if ! grep -qE '^APP_SECRET_KEY=.+' .env 2>/dev/null; then
+  if command -v openssl >/dev/null 2>&1; then
+    SECRET="$(openssl rand -hex 32)"
+  else
+    SECRET="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  fi
+  # vorhandene leere Zeile ersetzen, sonst anhängen
+  if grep -qE '^APP_SECRET_KEY=' .env 2>/dev/null; then
+    # portabel (GNU & BSD sed): über temporäre Datei
+    awk -v s="$SECRET" '/^APP_SECRET_KEY=/{print "APP_SECRET_KEY=" s; next} {print}' .env > .env.tmp && mv .env.tmp .env
+  else
+    echo "APP_SECRET_KEY=$SECRET" >> .env
+  fi
+  info "APP_SECRET_KEY erzeugt und in .env gespeichert (für portable Backups aufbewahren)."
+fi
+
 # 3) HTTPS optional ---------------------------------------------------------
 TLS_ARGS=""
 read -r -p "HTTPS/Reverse-Proxy (nginx) aktivieren? (Domain + Zertifikate nötig) [j/N] " yn || true
