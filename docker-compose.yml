@@ -3,13 +3,13 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    container_name: aihub-app
+    container_name: foundryhub-app
     ports:
       - "8000:8000"
     environment:
       # Standard: SQLite. Für Postgres das Profil "postgres" starten und hier
-      # z. B. DATABASE_URL=postgresql+psycopg://aihub:aihub@postgres:5432/aihub setzen.
-      - DATABASE_URL=${DATABASE_URL:-sqlite:////data/aihub.db}
+      # z. B. DATABASE_URL=postgresql+psycopg://foundryhub:foundryhub@postgres:5432/foundryhub setzen.
+      - DATABASE_URL=${DATABASE_URL:-sqlite:////data/foundryhub.db}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
@@ -45,10 +45,10 @@ services:
       - SANDBOX_URL=${SANDBOX_URL:-http://sandbox:8800}
       - OBSIDIAN_VAULT=${OBSIDIAN_VAULT:-/data/vault}
     volumes:
-      - aihub-data:/data
+      - foundryhub-data:/data
       # Für Obsidian: hier deinen Vault-Ordner einhängen, z. B.:
       #   - /pfad/zu/deinem/Obsidian-Vault:/data/vault
-      - aihub-vault:/data/vault
+      - foundryhub-vault:/data/vault
     depends_on:
       - ollama
       - sandbox
@@ -60,13 +60,13 @@ services:
     build:
       context: .
       dockerfile: sandbox/Dockerfile
-    container_name: aihub-sandbox
+    container_name: foundryhub-sandbox
     environment:
       - WORKSPACE_DIR=/data/workspace
     ports:
       - "8090:8090"   # Live-Vorschau (Dev-Server der Projekte)
     volumes:
-      - aihub-data:/data
+      - foundryhub-data:/data
     restart: unless-stopped
 
   # PostgreSQL (optional). Nur mit Profil starten:
@@ -74,26 +74,26 @@ services:
   # und in der App DATABASE_URL passend setzen (siehe oben).
   postgres:
     image: postgres:16-alpine
-    container_name: aihub-postgres
+    container_name: foundryhub-postgres
     profiles: ["postgres"]
     environment:
-      - POSTGRES_USER=${POSTGRES_USER:-aihub}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aihub}
-      - POSTGRES_DB=${POSTGRES_DB:-aihub}
+      - POSTGRES_USER=${POSTGRES_USER:-foundryhub}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-foundryhub}
+      - POSTGRES_DB=${POSTGRES_DB:-foundryhub}
     volumes:
-      - aihub-pgdata:/var/lib/postgresql/data
+      - foundryhub-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aihub}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-foundryhub}"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
 
   # Lokale Modelle (optional). Modelle vorher ziehen, z. B.:
-  #   docker exec -it aihub-ollama ollama pull llama3.1
+  #   docker exec -it foundryhub-ollama ollama pull llama3.1
   ollama:
     image: ollama/ollama:latest
-    container_name: aihub-ollama
+    container_name: foundryhub-ollama
     ports:
       - "11434:11434"
     volumes:
@@ -101,7 +101,7 @@ services:
     restart: unless-stopped
 
 volumes:
-  aihub-data:
-  aihub-vault:
+  foundryhub-data:
+  foundryhub-vault:
   ollama-data:
-  aihub-pgdata:
+  foundryhub-pgdata:

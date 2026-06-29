@@ -27,13 +27,13 @@ def dispatch(name, args):
         return "Keine URL angegeben"
     if name == "fetch_url":
         with httpx.Client(timeout=TIMEOUT, follow_redirects=True) as c:
-            r = c.get(url, headers={"User-Agent": "ai-hub-mcp/1.0"})
+            r = c.get(url, headers={"User-Agent": "foundry-hub-mcp/1.0"})
             ctype = r.headers.get("content-type", "")
             body = r.text[:MAX_CHARS]
             return f"HTTP {r.status_code} · {ctype}\n\n{body}"
     if name == "http_head":
         with httpx.Client(timeout=TIMEOUT, follow_redirects=True) as c:
-            r = c.head(url, headers={"User-Agent": "ai-hub-mcp/1.0"})
+            r = c.head(url, headers={"User-Agent": "foundry-hub-mcp/1.0"})
             keys = ["content-type", "content-length", "server", "location"]
             head = "\n".join(f"{k}: {r.headers[k]}" for k in keys if k in r.headers)
             return f"HTTP {r.status_code}\n{head}"
@@ -41,4 +41,4 @@ def dispatch(name, args):
 
 
 if __name__ == "__main__":
-    serve("ai-hub-web", TOOLS, dispatch)
+    serve("foundry-hub-web", TOOLS, dispatch)

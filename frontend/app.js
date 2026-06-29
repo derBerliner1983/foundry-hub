@@ -1,4 +1,4 @@
-// AI-Hub Frontend – Vanilla JS, spricht mit der REST-API.
+// Foundry-Hub Frontend – Vanilla JS, spricht mit der REST-API.
 const api = {
   async get(p) { const r = await fetch(p); return r.json(); },
   async post(p, b) { const r = await fetch(p, { method: "POST", headers: { "Content-Type": "application/json" }, body: b ? JSON.stringify(b) : undefined }); return r.json(); },
@@ -79,9 +79,9 @@ function applyTheme(t) {
     ? '<i data-lucide="moon"></i><span>Dunkel</span>'
     : '<i data-lucide="sun"></i><span>Hell</span>';
   icons();
-  localStorage.setItem("aihub-theme", t);
+  localStorage.setItem("foundryhub-theme", t);
 }
-applyTheme(localStorage.getItem("aihub-theme") || "dark");
+applyTheme(localStorage.getItem("foundryhub-theme") || "dark");
 document.getElementById("theme-toggle").addEventListener("click", () => {
   applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
 });
@@ -526,7 +526,7 @@ async function renderWorkshop() {
   document.getElementById("ws-github").onclick = async () => {
     const st = await api.get("/api/github/status");
     if (!st.configured) { alert("Bitte zuerst ein GitHub-Token unter Einstellungen → Zugangsdaten eintragen."); return; }
-    const repo = prompt("Repository-Name auf GitHub (" + (st.login || "") + "):", "ai-hub-projekt");
+    const repo = prompt("Repository-Name auf GitHub (" + (st.login || "") + "):", "foundry-hub-projekt");
     if (!repo) return;
     const r = await api.post("/api/github/push", { project_id: wsProject ? Number(wsProject) : null, repo_name: repo, private: true });
     alert(r.ok ? "Gepusht: " + r.url : "Fehler: " + (r.error || ""));
@@ -1339,7 +1339,7 @@ async function renderAuthScreen() {
     <div style="grid-column:1/-1;display:grid;place-items:center;min-height:100vh">
       <div class="card" style="width:360px;max-width:92vw">
         <div class="brand" style="justify-content:center"><div class="logo"><i data-lucide="bot"></i></div>
-          <div><b>AI-Hub</b><small>${setup ? "Owner-Konto einrichten" : "Anmelden"}</small></div></div>
+          <div><b>Foundry-Hub</b><small>${setup ? "Owner-Konto einrichten" : "Anmelden"}</small></div></div>
         <label>Benutzername</label><input id="au-user" autocomplete="username"/>
         <label>Passwort</label><input id="au-pass" type="password" autocomplete="current-password"
           onkeydown="if(event.key==='Enter')doAuth(${setup})"/>

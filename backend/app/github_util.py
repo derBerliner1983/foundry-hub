@@ -47,7 +47,7 @@ def push_project(project_id, repo_name: str, private: bool = True) -> dict:
 
     remote = f"https://x-access-token:{tok}@github.com/{login}/{repo_name}.git"
     # Workspace versionieren und pushen
-    workspace.git_autocommit(project_id, "AI-Hub: Stand für GitHub")
+    workspace.git_autocommit(project_id, "Foundry-Hub: Stand für GitHub")
     workspace._ws_exec(project_id, "git remote remove origin 2>/dev/null; "
                        f"git remote add origin {remote}")
     res = workspace._ws_exec(project_id, "git push -u origin main --force", timeout=120)

@@ -47,7 +47,7 @@ def _brave(query, count):
 def _duckduckgo(query, count):
     url = "https://html.duckduckgo.com/html/"
     with httpx.Client(timeout=TIMEOUT, follow_redirects=True,
-                      headers={"User-Agent": "Mozilla/5.0 (ai-hub-mcp)"}) as c:
+                      headers={"User-Agent": "Mozilla/5.0 (foundry-hub-mcp)"}) as c:
         r = c.post(url, data={"q": query})
         r.raise_for_status()
         page = r.text
@@ -81,4 +81,4 @@ def dispatch(name, args):
 
 
 if __name__ == "__main__":
-    serve("ai-hub-search", TOOLS, dispatch)
+    serve("foundry-hub-search", TOOLS, dispatch)

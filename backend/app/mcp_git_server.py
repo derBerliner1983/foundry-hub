@@ -69,4 +69,4 @@ def dispatch(name, args):
 
 
 if __name__ == "__main__":
-    serve("ai-hub-git", TOOLS, dispatch)
+    serve("foundry-hub-git", TOOLS, dispatch)
