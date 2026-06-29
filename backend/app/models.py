@@ -45,6 +45,9 @@ class Session(Base):
     active_tenant_id = Column(Integer, nullable=False)  # gerade betrachtete Firma
     created_at = Column(DateTime, default=now)
     expires_at = Column(DateTime, nullable=True)
+    last_seen = Column(DateTime, default=now)
+    user_agent = Column(String, default="")
+    ip = Column(String, default="")
 
 
 class Access(Base):
@@ -101,6 +104,9 @@ class Settings(Base):
     notify_questions = Column(Boolean, default=True)
     daily_digest = Column(Boolean, default=False)   # tägliche Zusammenfassung per Mail
     assistant_email_access = Column(Boolean, default=False)  # Daily-Assistant darf Mails lesen
+    # Automatische Sicherungen
+    auto_backup = Column(Boolean, default=False)    # tägliche Voll-Sicherung nach /data/backups
+    backup_keep = Column(Integer, default=7)        # wie viele Sicherungen behalten
 
 
 class Project(Base):

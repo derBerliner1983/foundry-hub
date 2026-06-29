@@ -49,6 +49,10 @@ FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "frontend")
 @app.on_event("startup")
 async def startup():
     Base.metadata.create_all(bind=engine)
+    from .migrate import ensure_columns
+    changed = ensure_columns()
+    if changed:
+        print("Migration: neue Spalten ->", ", ".join(changed))
     db = SessionLocal()
     try:
         # Pro vorhandenem Nutzer dessen Firma initialisieren
@@ -69,6 +73,61 @@ _PUBLIC = {"/api/health", "/api/auth/login", "/api/auth/setup",
            "/api/auth/status", "/api/auth/me"}
 
 
+# --------------------------------------------------------------------------- #
+# Rate-Limiting (in-memory, je Prozess) + Client-IP + IP-Allowlist
+# --------------------------------------------------------------------------- #
+import time as _time
+
+_rate_hits: dict = {}
+
+
+def _client_ip(request) -> str:
+    """Echte Client-IP – respektiert X-Forwarded-For (hinter Pangolin/Newt)."""
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return getattr(getattr(request, "client", None), "host", "") or ""
+
+
+def _rate_ok(key: str, limit: int, window: int) -> tuple:
+    """True wenn unter dem Limit. Gibt (ok, retry_after_seconds)."""
+    now = _time.time()
+    hits = [t for t in _rate_hits.get(key, []) if now - t < window]
+    if len(hits) >= limit:
+        retry = int(window - (now - hits[0])) + 1
+        _rate_hits[key] = hits
+        return False, retry
+    hits.append(now)
+    _rate_hits[key] = hits
+    return True, 0
+
+
+def _ip_allowlist() -> list:
+    raw = os.getenv("IP_ALLOWLIST", "").strip()
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def _ip_allowed(ip: str) -> bool:
+    allow = _ip_allowlist()
+    if not allow:
+        return True
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    for entry in allow:
+        try:
+            if "/" in entry:
+                if addr in ipaddress.ip_network(entry, strict=False):
+                    return True
+            elif ip == entry:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def _harden(resp, https: bool):
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "SAMEORIGIN"
@@ -80,11 +139,21 @@ def _harden(resp, https: bool):
 
 @app.middleware("http")
 async def auth_and_tenant(request, call_next):
+    from fastapi.responses import JSONResponse
     path = request.url.path
     https = request.url.scheme == "https"
+    # IP-Allowlist (falls per Env gesetzt) – gilt für alles
+    if not _ip_allowed(_client_ip(request)):
+        return _harden(JSONResponse({"error": "Zugriff von dieser IP nicht erlaubt"},
+                                    status_code=403), https)
     # Statische UI und öffentliche Auth-Routen frei
     if not path.startswith("/api/") or path in _PUBLIC:
         return _harden(await call_next(request), https)
+    # Allgemeines Rate-Limit pro IP für API-Aufrufe
+    ok, retry = _rate_ok("api:" + _client_ip(request), limit=300, window=60)
+    if not ok:
+        return _harden(JSONResponse({"error": "Zu viele Anfragen", "retry_after": retry},
+                                    status_code=429), https)
     ctx = auth.current(request)
     if not ctx:
         from fastapi.responses import JSONResponse
@@ -138,6 +207,7 @@ async def orchestrator_loop():
                 orch.run_recurring(db)
                 orch.poll_telegram(db)
                 orch.check_digests(db)
+                check_auto_backups()
                 await orch.tick(db)
                 s = orch.get_settings(db)
                 sleep_for = max(1.0, s.tick_seconds or config.TICK_INTERVAL_SECONDS)
@@ -259,6 +329,8 @@ class SettingsUpdate(BaseModel):
     notify_questions: bool | None = None
     daily_digest: bool | None = None
     assistant_email_access: bool | None = None
+    auto_backup: bool | None = None
+    backup_keep: int | None = None
 
 
 class UserRating(BaseModel):
@@ -324,7 +396,12 @@ def auth_setup(c: Credentials, request: Request, response: Response):
 
 @app.post("/api/auth/login")
 def auth_login(c: Credentials, request: Request, response: Response):
-    token, err = auth.login(c.username, c.password, c.code)
+    ok, retry = _rate_ok("login:" + _client_ip(request), limit=10, window=300)
+    if not ok:
+        raise HTTPException(429, f"Zu viele Anmeldeversuche – in {retry}s erneut versuchen")
+    token, err = auth.login(c.username, c.password, c.code,
+                            user_agent=request.headers.get("user-agent", ""),
+                            ip=_client_ip(request))
     if err == "locked":
         raise HTTPException(429, "Zu viele Fehlversuche – kurz warten und erneut versuchen")
     if err == "2fa":
@@ -427,6 +504,34 @@ def auth_logout(request: Request, response: Response):
         auth.logout(ctx["token"])
     response.delete_cookie(auth.COOKIE)
     return {"ok": True}
+
+
+@app.get("/api/auth/sessions")
+def list_my_sessions(request: Request):
+    ctx = auth.current(request)
+    if not ctx:
+        raise HTTPException(401, "Nicht angemeldet")
+    return {"sessions": auth.list_sessions(ctx["user_id"], ctx["token"])}
+
+
+@app.delete("/api/auth/sessions/{session_id}")
+def revoke_my_session(session_id: str, request: Request):
+    ctx = auth.current(request)
+    if not ctx:
+        raise HTTPException(401, "Nicht angemeldet")
+    ok = auth.revoke_session(ctx["user_id"], session_id)
+    if not ok:
+        raise HTTPException(404, "Sitzung nicht gefunden")
+    return {"ok": True}
+
+
+@app.post("/api/auth/sessions/revoke-others")
+def revoke_other_sessions(request: Request):
+    ctx = auth.current(request)
+    if not ctx:
+        raise HTTPException(401, "Nicht angemeldet")
+    n = auth.revoke_other_sessions(ctx["user_id"], ctx["token"])
+    return {"ok": True, "revoked": n}
 
 
 @app.get("/api/auth/me")
@@ -916,6 +1021,8 @@ def get_settings():
             "notify_questions": s.notify_questions,
             "daily_digest": s.daily_digest,
             "assistant_email_access": s.assistant_email_access,
+            "auto_backup": s.auto_backup,
+            "backup_keep": s.backup_keep,
             "email_status": {"smtp": email_util.smtp_configured(),
                              "imap": email_util.imap_configured()},
             "providers_available": providers.available_providers(),
@@ -1949,12 +2056,10 @@ def budget_history(days: int = 30):
         db.close()
 
 
-@app.get("/api/backup/export")
-def backup_export(request: Request):
-    """Vollständiger JSON-Snapshot der aktuellen Firma (Backup)."""
+def _snapshot_data():
+    """Vollständiger JSON-Snapshot der aktuellen Firma (Tenant aus Context)."""
     from .models import (Agent as A, Project as P, Task as T, Milestone as Mi,
-                         Rule as Ru, Skill as Sk, McpServer as Mc, Settings as Se,
-                         Message as Me, Decision as De)
+                         Rule as Ru, Skill as Sk, McpServer as Mc, Settings as Se)
     db = SessionLocal()
     try:
         t = context.tid()
@@ -1962,7 +2067,7 @@ def backup_export(request: Request):
         def dump(model, cols):
             return [{c: getattr(o, c) for c in cols}
                     for o in db.query(model).filter(model.tenant_id == t).all()]
-        data = {
+        return {
             "tenant": t,
             "settings": dump(Se, ["autonomy_level", "default_chef_provider", "default_chef_model",
                                   "default_worker_provider", "default_worker_model", "thinking_mode",
@@ -1976,30 +2081,29 @@ def backup_export(request: Request):
             "skills": dump(Sk, ["name", "description", "instructions", "command", "enabled"]),
             "mcp": dump(Mc, ["name", "description", "transport", "command", "url", "enabled"]),
         }
-        return data
     finally:
         db.close()
 
 
-@app.get("/api/backup/full")
-def backup_full(request: Request):
-    """Vollständiges Backup als ZIP: DB-Snapshot (JSON) + Workspaces + Vault."""
+def _build_full_backup_zip(dest_path: str = None) -> str:
+    """Schreibt ein Voll-Backup (Snapshot + Workspaces + Vault) als ZIP und gibt
+    den Pfad zurück. Operiert auf dem Tenant im aktuellen Context."""
     import json as _json
     import tempfile
     import zipfile
-    from .models import Project as P, Document
+    from .models import Project as P
     t = context.tid()
-    snapshot = backup_export(request)  # JSON-Snapshot (gefiltert nach Tenant)
+    snapshot = _snapshot_data()
     db = SessionLocal()
     try:
         project_ids = [p.id for p in db.query(P).filter(P.tenant_id == t).all()]
     finally:
         db.close()
-    fd, path = tempfile.mkstemp(suffix=".zip", prefix=f"backup_tenant_{t}_")
-    os.close(fd)
-    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+    if dest_path is None:
+        fd, dest_path = tempfile.mkstemp(suffix=".zip", prefix=f"backup_tenant_{t}_")
+        os.close(fd)
+    with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("snapshot.json", _json.dumps(snapshot, default=str, ensure_ascii=False, indent=2))
-        # Workspaces der Projekte + shared
         for pid in project_ids + ["shared"]:
             root = os.path.join(config.WORKSPACE_DIR, f"project_{pid}")
             if os.path.isdir(root):
@@ -2007,13 +2111,26 @@ def backup_full(request: Request):
                     for fn in files:
                         full = os.path.join(base, fn)
                         z.write(full, "workspace/" + os.path.relpath(full, config.WORKSPACE_DIR))
-        # Vault-Notizen der Firma
         vroot = os.path.join(config.OBSIDIAN_VAULT, "AI-Hub", f"tenant_{t}")
         if os.path.isdir(vroot):
             for base, _d, files in os.walk(vroot):
                 for fn in files:
                     full = os.path.join(base, fn)
                     z.write(full, "vault/" + os.path.relpath(full, vroot))
+    return dest_path
+
+
+@app.get("/api/backup/export")
+def backup_export(request: Request):
+    """Vollständiger JSON-Snapshot der aktuellen Firma (Backup)."""
+    return _snapshot_data()
+
+
+@app.get("/api/backup/full")
+def backup_full(request: Request):
+    """Vollständiges Backup als ZIP: DB-Snapshot (JSON) + Workspaces + Vault."""
+    t = context.tid()
+    path = _build_full_backup_zip()
     return FileResponse(path, filename=f"ai-hub-backup-tenant-{t}.zip", media_type="application/zip")
 
 
@@ -2047,6 +2164,195 @@ def backup_import_config(data: ConfigImport):
         return {"ok": True}
     finally:
         db.close()
+
+
+def _restore_snapshot(snapshot: dict) -> dict:
+    """Stellt Konfiguration aus einem Snapshot in der AKTUELLEN Firma wieder her.
+    Konservativ: legt Regeln/Skills/MCP/Projekte/Settings an bzw. aktualisiert sie,
+    löscht aber nichts Bestehendes (kein destruktives Überschreiben)."""
+    from .models import (Project as P, Rule as Ru, Skill as Sk, McpServer as Mc,
+                         Settings as Se)
+    counts = {"projects": 0, "rules": 0, "skills": 0, "mcp": 0, "settings": 0}
+    db = SessionLocal()
+    try:
+        t = context.tid()
+        for p in snapshot.get("projects", []):
+            if not db.query(P).filter(P.tenant_id == t, P.title == p.get("title")).first():
+                db.add(P(title=p.get("title", "Projekt"), description=p.get("description", ""),
+                         status=p.get("status", "active"), test_command=p.get("test_command", "")))
+                counts["projects"] += 1
+        for r in snapshot.get("rules", []):
+            if not db.query(Ru).filter(Ru.tenant_id == t, Ru.title == r.get("title")).first():
+                db.add(Ru(title=r.get("title", "Regel"), content=r.get("content", ""),
+                          scope=r.get("scope", "global"), role=r.get("role"),
+                          active=r.get("active", True), source="user"))
+                counts["rules"] += 1
+        for s in snapshot.get("skills", []):
+            if not db.query(Sk).filter(Sk.tenant_id == t, Sk.name == s.get("name")).first():
+                db.add(Sk(name=s.get("name"), description=s.get("description", ""),
+                          instructions=s.get("instructions", ""), command=s.get("command", ""),
+                          enabled=s.get("enabled", True)))
+                counts["skills"] += 1
+        for m in snapshot.get("mcp", []):
+            if not db.query(Mc).filter(Mc.tenant_id == t, Mc.name == m.get("name")).first():
+                db.add(Mc(name=m.get("name"), description=m.get("description", ""),
+                          transport=m.get("transport", "stdio"), command=m.get("command", ""),
+                          url=m.get("url", ""), enabled=m.get("enabled", True)))
+                counts["mcp"] += 1
+        sset = snapshot.get("settings", [])
+        if sset:
+            cur = db.query(Se).filter(Se.tenant_id == t).first()
+            if cur:
+                for k, v in sset[0].items():
+                    if hasattr(cur, k):
+                        setattr(cur, k, v)
+                counts["settings"] = 1
+        db.commit()
+        return counts
+    finally:
+        db.close()
+
+
+@app.post("/api/backup/restore-full")
+async def backup_restore_full(file: UploadFile = File(...)):
+    """Stellt aus einem Voll-Backup-ZIP wieder her: Snapshot (Konfiguration),
+    Workspaces und Vault-Notizen."""
+    import io as _io
+    import json as _json
+    import zipfile
+    raw = await file.read()
+    try:
+        z = zipfile.ZipFile(_io.BytesIO(raw))
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "Keine gültige ZIP-Datei")
+    names = z.namelist()
+    counts = {}
+    if "snapshot.json" in names:
+        try:
+            snapshot = _json.loads(z.read("snapshot.json").decode("utf-8"))
+            counts = _restore_snapshot(snapshot)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"Snapshot fehlerhaft: {e}")
+    files_written = 0
+    t = context.tid()
+    for name in names:
+        try:
+            if name.startswith("workspace/"):
+                rel = name[len("workspace/"):]
+                if not rel or rel.endswith("/"):
+                    continue
+                dest = os.path.realpath(os.path.join(config.WORKSPACE_DIR, rel))
+                if not dest.startswith(os.path.realpath(config.WORKSPACE_DIR)):
+                    continue
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with open(dest, "wb") as f:
+                    f.write(z.read(name))
+                files_written += 1
+            elif name.startswith("vault/"):
+                rel = name[len("vault/"):]
+                if not rel or rel.endswith("/"):
+                    continue
+                vroot = os.path.join(config.OBSIDIAN_VAULT, "AI-Hub", f"tenant_{t}")
+                dest = os.path.realpath(os.path.join(vroot, rel))
+                if not dest.startswith(os.path.realpath(vroot)):
+                    continue
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with open(dest, "wb") as f:
+                    f.write(z.read(name))
+                files_written += 1
+        except Exception:  # noqa: BLE001
+            continue
+    return {"ok": True, "restored": counts, "files": files_written}
+
+
+def _backup_dir(tenant_id: int) -> str:
+    base = os.path.join(os.path.dirname(config.DATABASE_URL.split("///")[-1])
+                        if config.DATABASE_URL.startswith("sqlite") else "/data",
+                        "backups", f"tenant_{tenant_id}")
+    return base
+
+
+def _make_auto_backup(tenant_id: int, keep: int = 7) -> str:
+    """Erstellt eine Voll-Sicherung im Backup-Ordner der Firma und löscht alte
+    (über ``keep`` hinaus). Erwartet, dass der Context auf den Tenant gesetzt ist."""
+    from datetime import datetime as _d
+    d = _backup_dir(tenant_id)
+    os.makedirs(d, exist_ok=True)
+    ts = _d.utcnow().strftime("%Y%m%d-%H%M%S")
+    dest = os.path.join(d, f"backup-{ts}.zip")
+    try:
+        _build_full_backup_zip(dest)
+    except Exception as e:  # noqa: BLE001
+        print("Auto-Backup-Fehler:", e)
+        return ""
+    # Rotation: nur die neuesten `keep` behalten
+    zips = sorted([f for f in os.listdir(d) if f.endswith(".zip")], reverse=True)
+    for old in zips[max(1, keep):]:
+        try:
+            os.remove(os.path.join(d, old))
+        except OSError:
+            pass
+    return dest
+
+
+# letzte automatische Sicherung je Tenant (Datum), verhindert Mehrfach-Backups/Tag
+_auto_backup_done: dict = {}
+
+
+def check_auto_backups():
+    """Prüft je Firma, ob heute schon gesichert wurde – wenn nicht und aktiviert,
+    legt eine Sicherung an. Wird im Orchestrator-Takt aufgerufen."""
+    from datetime import datetime as _d
+    from .models import Settings as Se, User
+    today = _d.utcnow().date().isoformat()
+    db = SessionLocal()
+    try:
+        user_ids = [u.id for u in db.query(User).all()]
+    finally:
+        db.close()
+    for tid in user_ids:
+        prev = context.tid()
+        try:
+            context.set_tenant(tid)
+            db = SessionLocal()
+            try:
+                s = db.query(Se).filter(Se.tenant_id == tid).first()
+                if not s or not getattr(s, "auto_backup", False):
+                    continue
+                keep = getattr(s, "backup_keep", 7) or 7
+            finally:
+                db.close()
+            if _auto_backup_done.get(tid) == today:
+                continue
+            _make_auto_backup(tid, keep)
+            _auto_backup_done[tid] = today
+        except Exception as e:  # noqa: BLE001
+            print("Auto-Backup-Prüfung-Fehler:", e)
+        finally:
+            context.set_tenant(prev)
+
+
+@app.get("/api/backup/auto/list")
+def backup_auto_list():
+    """Listet die automatisch erstellten Sicherungen der Firma."""
+    from datetime import datetime as _d
+    d = _backup_dir(context.tid())
+    out = []
+    if os.path.isdir(d):
+        for fn in sorted(os.listdir(d), reverse=True):
+            full = os.path.join(d, fn)
+            if os.path.isfile(full) and fn.endswith(".zip"):
+                st = os.stat(full)
+                out.append({"name": fn, "size": st.st_size,
+                            "created": _d.utcfromtimestamp(st.st_mtime).isoformat()})
+    return {"backups": out, "dir": d}
+
+
+@app.post("/api/backup/auto/now")
+def backup_auto_now():
+    """Erstellt sofort eine automatische Voll-Sicherung."""
+    path = _make_auto_backup(context.tid())
+    return {"ok": bool(path), "file": os.path.basename(path) if path else ""}
 
 
 # --------------------------------------------------------------------------- #
@@ -2134,6 +2440,66 @@ def email_to_task(e: EmailTask):
         return {"ok": True}
     finally:
         db.close()
+
+
+# --------------------------------------------------------------------------- #
+# Metriken / Observability
+# --------------------------------------------------------------------------- #
+@app.get("/api/metrics")
+def metrics(request: Request):
+    """Kennzahlen der aktuellen Firma (für Monitoring/Beobachtung)."""
+    from datetime import datetime as _d
+    from .models import (Agent as A, Project as P, Task as T, Message as Me,
+                         Usage as U)
+    t = context.tid()
+    db = SessionLocal()
+    try:
+        def cnt(model, *filters):
+            q = db.query(model).filter(model.tenant_id == t)
+            for f in filters:
+                q = q.filter(f)
+            return q.count()
+        usages = db.query(U).filter(U.tenant_id == t).all()
+        tokens_in = sum(u.input_tokens or 0 for u in usages)
+        tokens_out = sum(u.output_tokens or 0 for u in usages)
+        cost = round(sum(u.cost or 0 for u in usages), 4)
+        return {
+            "tenant": t,
+            "agents": {"total": cnt(A), "working": cnt(A, A.status == "working"),
+                       "active": cnt(A, A.status != "fired")},
+            "projects": {"total": cnt(P), "active": cnt(P, P.status == "active"),
+                         "done": cnt(P, P.status == "done")},
+            "tasks": {"total": cnt(T), "done": cnt(T, T.status == "done"),
+                      "in_progress": cnt(T, T.status == "in_progress"),
+                      "open": cnt(T, T.status == "todo")},
+            "messages": cnt(Me),
+            "usage": {"calls": len(usages), "tokens_in": tokens_in,
+                      "tokens_out": tokens_out, "cost_usd": cost},
+            "sessions": len(auth.list_sessions(request.state.user["user_id"]))
+            if hasattr(request.state, "user") else 0,
+            "time": _d.utcnow().isoformat(),
+        }
+    finally:
+        db.close()
+
+
+@app.get("/api/metrics/prometheus")
+def metrics_prometheus(request: Request):
+    """Metriken im Prometheus-Textformat (für Scraper)."""
+    from fastapi.responses import PlainTextResponse
+    m = metrics(request)
+    lines = [
+        "# HELP aihub_agents_total Anzahl Agenten",
+        f'aihub_agents_total{{tenant="{m["tenant"]}"}} {m["agents"]["total"]}',
+        f'aihub_agents_working{{tenant="{m["tenant"]}"}} {m["agents"]["working"]}',
+        f'aihub_projects_active{{tenant="{m["tenant"]}"}} {m["projects"]["active"]}',
+        f'aihub_tasks_done{{tenant="{m["tenant"]}"}} {m["tasks"]["done"]}',
+        f'aihub_tasks_open{{tenant="{m["tenant"]}"}} {m["tasks"]["open"]}',
+        f'aihub_cost_usd{{tenant="{m["tenant"]}"}} {m["usage"]["cost_usd"]}',
+        f'aihub_tokens_in{{tenant="{m["tenant"]}"}} {m["usage"]["tokens_in"]}',
+        f'aihub_tokens_out{{tenant="{m["tenant"]}"}} {m["usage"]["tokens_out"]}',
+    ]
+    return PlainTextResponse("\n".join(lines) + "\n")
 
 
 # --------------------------------------------------------------------------- #

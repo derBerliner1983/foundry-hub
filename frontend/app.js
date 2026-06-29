@@ -932,6 +932,10 @@ async function renderSettings() {
         ${twofa ? `<button class="btn ghost sm" id="twofa-off">deaktivieren</button>`
           : `<button class="btn ghost sm" id="twofa-on"><i data-lucide="shield"></i> einrichten</button>`}</div>
       <div id="twofa-area"></div>
+      <hr style="border-color:var(--border);margin:12px 0"/>
+      <div class="row"><b style="flex:1">Angemeldete Sitzungen</b>
+        <button class="btn ghost sm" id="sess-others"><i data-lucide="log-out"></i> Andere abmelden</button></div>
+      <div id="sess-list" class="muted" style="margin-top:8px">lade …</div>
     </div>
     <div class="card" style="margin-bottom:14px"><h3><i data-lucide="repeat"></i> Wiederkehrende Aufträge</h3>
       ${recurring.length ? recurring.map(j => `<div class="agent-row">
@@ -945,8 +949,14 @@ async function renderSettings() {
       <div class="row" style="flex-wrap:wrap"><button class="btn" id="bk-full"><i data-lucide="archive"></i> Vollständiges Backup (ZIP)</button>
         <button class="btn ghost" id="bk-export"><i data-lucide="download"></i> Snapshot (JSON)</button>
         <button class="btn ghost" id="bk-import"><i data-lucide="upload"></i> Regeln/Skills/MCP importieren</button>
-        <input type="file" id="bk-file" class="hidden" accept="application/json"/></div>
-      <div class="tag" style="margin-top:8px">Vollständiges Backup enthält DB-Snapshot, alle Projekt-Workspaces und die Vault-Notizen. Der JSON-Snapshot/Import deckt die Konfiguration (Regeln/Skills/MCP) ab.</div>
+        <button class="btn ghost" id="bk-restore"><i data-lucide="upload-cloud"></i> Aus ZIP wiederherstellen</button>
+        <input type="file" id="bk-file" class="hidden" accept="application/json"/>
+        <input type="file" id="bk-zip" class="hidden" accept=".zip,application/zip"/></div>
+      <div class="row" style="margin-top:10px"><div class="toggle" id="s-autobak"><div class="switch ${s.auto_backup ? 'on' : ''}"></div> Automatische tägliche Sicherung</div>
+        <input id="s-bakkeep" type="number" min="1" max="60" value="${s.backup_keep || 7}" style="width:90px;margin-left:10px" title="Wie viele Sicherungen behalten"/>
+        <button class="btn ghost sm" id="bk-now" style="margin-left:10px">jetzt sichern</button></div>
+      <div id="bk-list" class="muted" style="margin-top:8px"></div>
+      <div class="tag" style="margin-top:8px">Vollständiges Backup enthält DB-Snapshot, alle Projekt-Workspaces und die Vault-Notizen. Automatische Sicherungen liegen unter <code>/data/backups</code> im Container.</div>
     </div>
     <div class="card" style="margin-bottom:14px"><h3><i data-lucide="clock"></i> Zeitplan – wann die KI prüft & beobachtet</h3>
       <div class="grid cols-2" style="gap:10px">
@@ -1073,7 +1083,7 @@ async function renderSettings() {
     await api.post("/api/ollama/pull", { name: n }); loadOllama();
   };
   const toggles = {};
-  ["s-run", "s-hire", "s-fire", "s-code", "s-verify", "s-incr", "s-review", "s-risk", "s-route", "s-notif", "s-novd", "s-noq", "s-digest", "s-aimail"].forEach(id => {
+  ["s-run", "s-hire", "s-fire", "s-code", "s-verify", "s-incr", "s-review", "s-risk", "s-route", "s-notif", "s-novd", "s-noq", "s-digest", "s-aimail", "s-autobak"].forEach(id => {
     const el = document.getElementById(id);
     toggles[id] = el.querySelector(".switch").classList.contains("on");
     el.onclick = () => { const sw = el.querySelector(".switch"); sw.classList.toggle("on"); toggles[id] = sw.classList.contains("on"); };
@@ -1117,6 +1127,47 @@ async function renderSettings() {
     await api.post("/api/backup/import-config", { rules: data.rules || [], skills: data.skills || [], mcp: data.mcp || [] });
     alert("Importiert."); renderSettings();
   };
+  document.getElementById("bk-restore").onclick = () => document.getElementById("bk-zip").click();
+  document.getElementById("bk-zip").onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    if (!confirm("Aus diesem ZIP wiederherstellen? Vorhandenes wird ergänzt, nicht gelöscht.")) return;
+    const fd = new FormData(); fd.append("file", f);
+    const r = await fetch("/api/backup/restore-full", { method: "POST", body: fd });
+    const d = await r.json().catch(() => ({}));
+    alert(r.status === 200 ? `Wiederhergestellt: ${JSON.stringify(d.restored)} · Dateien: ${d.files}` : "Fehler: " + (d.detail || r.status));
+    renderSettings();
+  };
+  document.getElementById("bk-now").onclick = async () => {
+    document.getElementById("bk-now").textContent = "sichert …";
+    await api.post("/api/backup/auto/now"); loadBackups();
+    document.getElementById("bk-now").textContent = "jetzt sichern";
+  };
+  async function loadBackups() {
+    try {
+      const r = await api.get("/api/backup/auto/list");
+      const el = document.getElementById("bk-list");
+      el.innerHTML = r.backups.length
+        ? r.backups.map(b => `<div>📦 ${esc(b.name)} · ${(b.size / 1024).toFixed(0)} KB · ${b.created.replace('T', ' ').slice(0, 16)}</div>`).join("")
+        : "Noch keine automatischen Sicherungen.";
+    } catch (_) {}
+  }
+  loadBackups();
+  // Sitzungen
+  async function loadSessions() {
+    try {
+      const r = await api.get("/api/auth/sessions");
+      const el = document.getElementById("sess-list");
+      el.innerHTML = r.sessions.map(x => `<div class="agent-row"><div class="info">
+        <b>${x.current ? '➡️ Diese Sitzung' : 'Sitzung'} ${esc(x.ip || '')}</b>
+        <small>${esc((x.user_agent || '').slice(0, 60))} · zuletzt ${x.last_seen ? x.last_seen.replace('T', ' ').slice(0, 16) : '?'}</small></div>
+        ${x.current ? '' : `<button class="btn ghost sm" onclick="revokeSession('${x.id}')">abmelden</button>`}</div>`).join("");
+    } catch (_) {}
+  }
+  loadSessions();
+  document.getElementById("sess-others").onclick = async () => {
+    if (!confirm("Alle anderen Sitzungen abmelden?")) return;
+    await api.post("/api/auth/sessions/revoke-others"); loadSessions();
+  };
   // Zugangsdaten speichern (nur ausgefüllte Felder)
   document.getElementById("sec-save").onclick = async () => {
     const payload = {};
@@ -1155,6 +1206,7 @@ async function renderSettings() {
       user_email: document.getElementById("s-uemail").value,
       email_notifications: toggles["s-notif"], notify_overdue: toggles["s-novd"],
       notify_questions: toggles["s-noq"], daily_digest: toggles["s-digest"], assistant_email_access: toggles["s-aimail"],
+      auto_backup: toggles["s-autobak"], backup_keep: parseInt(document.getElementById("s-bakkeep").value || "7"),
       telegram_token: document.getElementById("s-tgtoken").value, telegram_chat_id: document.getElementById("s-tgchat").value,
       default_chef_provider: document.getElementById("s-cp").value, default_chef_model: document.getElementById("s-cm").value,
       default_worker_provider: document.getElementById("s-wp").value, default_worker_model: document.getElementById("s-wm").value,
@@ -1326,6 +1378,7 @@ async function renderUsers() {
 window.shareWith = async (username) => { await api.post("/api/access", { username }); renderUsers(); };
 window.unshare = async (uid) => { await fetch("/api/access/" + uid, { method: "DELETE" }); renderUsers(); };
 window.delRecurring = async (id) => { await fetch("/api/recurring/" + id, { method: "DELETE" }); renderSettings(); };
+window.revokeSession = async (id) => { await fetch("/api/auth/sessions/" + id, { method: "DELETE" }); renderSettings(); };
 window.resetPw = async (uid, name) => {
   const pw = prompt("Neues Passwort für " + name + " (min. 6 Zeichen):");
   if (!pw) return;
