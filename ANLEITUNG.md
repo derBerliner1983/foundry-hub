@@ -14,8 +14,8 @@ findest du in der [README](README.md).
 Per Git (empfohlen – so kannst du später einfach aktualisieren):
 
 ```bash
-git clone https://github.com/derBerliner1983/Ai-hub.git
-cd Ai-hub
+git clone https://github.com/derBerliner1983/foundry-hub.git
+cd foundry-hub
 ```
 
 Ohne Git: auf GitHub **Code → Download ZIP**, auf den Server kopieren, entpacken

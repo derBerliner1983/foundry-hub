@@ -48,8 +48,8 @@ Du gibst dem **Chef** einen Auftrag, er **stellt Projektleiter ein**, die wieder
 Voraussetzung: **Docker** + **Docker Compose**. Repo holen:
 
 ```bash
-git clone https://github.com/derBerliner1983/Ai-hub.git
-cd Ai-hub
+git clone https://github.com/derBerliner1983/foundry-hub.git
+cd foundry-hub
 ```
 
 Am einfachsten per Skript (prüft Docker, legt `.env` an, erzeugt einen
