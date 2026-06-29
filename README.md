@@ -45,8 +45,15 @@ Du gibst dem **Chef** einen Auftrag, er **stellt Projektleiter ein**, die wieder
 
 ## Schnellstart
 
-Am einfachsten per Skript (prüft Docker, legt `.env` an, baut & startet, optional
-HTTPS und lokales Modell):
+Voraussetzung: **Docker** + **Docker Compose**. Repo holen:
+
+```bash
+git clone https://github.com/derBerliner1983/Ai-hub.git
+cd Ai-hub
+```
+
+Am einfachsten per Skript (prüft Docker, legt `.env` an, erzeugt einen
+`APP_SECRET_KEY`, baut & startet, optional HTTPS und lokales Modell):
 
 ```bash
 ./install.sh
