@@ -2583,3 +2583,9 @@ if os.path.isdir(FRONTEND_DIR):
     @app.get("/")
     def index():
         return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
+
+    @app.get("/favicon.svg")
+    @app.get("/favicon.ico")
+    def favicon():
+        return FileResponse(os.path.join(FRONTEND_DIR, "favicon.svg"),
+                            media_type="image/svg+xml")

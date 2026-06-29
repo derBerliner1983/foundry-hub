@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Foundry-Hub">
+  <defs>
+    <linearGradient id="fhbg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#6366f1"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="64" height="64" rx="14" fill="url(#fhbg)"/>
+  <!-- Verbindungen (Hub-Speichen) -->
+  <g stroke="#ffffff" stroke-width="3.2" stroke-linecap="round" opacity="0.95">
+    <line x1="32" y1="32" x2="32" y2="16"/>
+    <line x1="32" y1="32" x2="17" y2="44"/>
+    <line x1="32" y1="32" x2="47" y2="44"/>
+  </g>
+  <!-- Agenten-Knoten -->
+  <g fill="#ffffff">
+    <circle cx="32" cy="15" r="5.4"/>
+    <circle cx="16" cy="45" r="5.4"/>
+    <circle cx="48" cy="45" r="5.4"/>
+  </g>
+  <!-- Zentraler Foundry-Kern (Sechseck) -->
+  <path d="M32 23.4 L39.4 27.7 L39.4 36.3 L32 40.6 L24.6 36.3 L24.6 27.7 Z"
+        fill="#ffffff"/>
+  <circle cx="32" cy="32" r="3.1" fill="url(#fhbg)"/>
+</svg>
