@@ -40,6 +40,37 @@ document.querySelectorAll(".nav-item").forEach(el => {
   });
 });
 
+// ---------- Globale Suche ----------
+(function () {
+  const box = document.getElementById("gsearch");
+  const panel = document.getElementById("gsearch-results");
+  if (!box || !panel) return;
+  let timer = null;
+  const ICONS = { Projekt: "folder", Aufgabe: "check-square", Nachricht: "mail", Agent: "user", Regel: "book-open", Wissen: "brain" };
+  async function run() {
+    const q = box.value.trim();
+    if (q.length < 2) { panel.classList.add("hidden"); panel.innerHTML = ""; return; }
+    try {
+      const r = await api.get("/api/search?q=" + encodeURIComponent(q));
+      if (!r.results.length) { panel.innerHTML = `<div class="gs-empty">Keine Treffer.</div>`; panel.classList.remove("hidden"); icons(); return; }
+      panel.innerHTML = r.results.map((x, i) => `<div class="gs-item" data-i="${i}">
+        <i data-lucide="${ICONS[x.type] || 'search'}"></i>
+        <div class="gs-main"><b>${esc(x.title)}</b><small>${esc(x.type)}${x.snippet ? ' · ' + esc(x.snippet) : ''}</small></div></div>`).join("");
+      panel.classList.remove("hidden"); icons();
+      panel.querySelectorAll(".gs-item").forEach(el => {
+        el.onclick = () => {
+          const x = r.results[parseInt(el.dataset.i)];
+          panel.classList.add("hidden"); box.value = "";
+          if (x.view) window.goView(x.view);
+        };
+      });
+    } catch (_) {}
+  }
+  box.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(run, 220); });
+  box.addEventListener("keydown", (e) => { if (e.key === "Escape") { panel.classList.add("hidden"); box.value = ""; } });
+  document.addEventListener("click", (e) => { if (!document.getElementById("gsearch-wrap").contains(e.target)) panel.classList.add("hidden"); });
+})();
+
 // ---------- Theme (mit Speicherung) ----------
 function applyTheme(t) {
   document.documentElement.dataset.theme = t;

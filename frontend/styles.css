@@ -196,3 +196,17 @@ label { font-size: 12px; color: var(--text-dim); display: block; margin-bottom: 
 .empty { color: var(--text-dim); text-align: center; padding: 30px; }
 .tag { font-size: 11px; padding: 2px 8px; border-radius: 6px; background: var(--panel-2); color: var(--text-dim); }
 @media (max-width: 820px) { .app { grid-template-columns: 1fr; } .sidebar { position: static; height: auto; flex-direction: row; flex-wrap: wrap; } .grid.cols-3, .grid.cols-2 { grid-template-columns: 1fr; } }
+
+/* Globale Suche (Topbar) */
+#gsearch-results {
+  position: absolute; top: 38px; right: 0; width: 380px; max-height: 60vh; overflow-y: auto;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(0,0,0,.35); z-index: 50; padding: 6px;
+}
+.gs-item { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+.gs-item:hover { background: var(--panel); }
+.gs-item i { width: 16px; height: 16px; color: var(--text-dim); flex-shrink: 0; }
+.gs-main { min-width: 0; }
+.gs-main b { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gs-main small { color: var(--text-dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.gs-empty { padding: 12px; color: var(--text-dim); font-size: 13px; }

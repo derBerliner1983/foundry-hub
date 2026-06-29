@@ -12,6 +12,7 @@ from . import assistant as assistant_mod
 from . import auth
 from . import context
 from . import email_util
+from . import knowledge
 from . import mcp_client
 from . import ollama_admin
 from . import orchestrator as orch
@@ -1869,10 +1870,9 @@ def list_knowledge():
 
 
 def _embed_json(title, content):
-    from . import embeddings
-    import json as _j
-    v = embeddings.embed((title or "") + "\n" + (content or ""))
-    return _j.dumps(v) if v else ""
+    """Chunk-basiertes Embedding (RAG) für ein Dokument."""
+    from . import knowledge as _kn
+    return _kn.embed_doc_json(title, content)
 
 
 @app.post("/api/knowledge")
@@ -1922,7 +1922,7 @@ async def upload_knowledge(file: UploadFile = File(...)):
     db = SessionLocal()
     try:
         doc = Document(title=file.filename or "Dokument", content=text[:200000],
-                       source="upload", embedding=_embed_json(file.filename, text[:8000]))
+                       source="upload", embedding=_embed_json(file.filename, text[:200000]))
         db.add(doc)
         db.commit()
         return {"ok": True, "id": doc.id, "chars": len(text)}
@@ -1940,7 +1940,7 @@ def reindex_knowledge():
         n = 0
         if embeddings.available():
             for d in db.query(Document).filter(Document.tenant_id == context.tid()).all():
-                d.embedding = _embed_json(d.title, d.content[:8000])
+                d.embedding = _embed_json(d.title, d.content)
                 n += 1
             db.commit()
         return {"ok": True, "indexed": n, "available": embeddings.available()}
@@ -1973,7 +1973,7 @@ def knowledge_web(w: WebIngest):
     db = SessionLocal()
     try:
         doc = Document(title="🌐 " + title, content=text, source="upload",
-                       embedding=_embed_json(title, text[:8000]))
+                       embedding=_embed_json(title, text[:200000]))
         db.add(doc)
         db.commit()
         return {"ok": True, "id": doc.id, "chars": len(text), "title": title}
@@ -2440,6 +2440,60 @@ def email_to_task(e: EmailTask):
         return {"ok": True}
     finally:
         db.close()
+
+
+# --------------------------------------------------------------------------- #
+# Globale Suche
+# --------------------------------------------------------------------------- #
+@app.get("/api/search")
+def global_search(q: str, limit: int = 8):
+    """Durchsucht Projekte, Aufgaben, Nachrichten, Agenten, Regeln & Wissen."""
+    from .models import (Project as P, Task as T, Message as Me, Agent as A,
+                         Rule as Ru)
+    term = (q or "").strip()
+    if len(term) < 2:
+        return {"results": []}
+    like = f"%{term}%"
+    t = context.tid()
+    out = []
+    db = SessionLocal()
+    try:
+        for p in (db.query(P).filter(P.tenant_id == t)
+                  .filter(P.title.ilike(like) | P.description.ilike(like)).limit(limit).all()):
+            out.append({"type": "Projekt", "icon": "folder", "id": p.id,
+                        "title": p.title, "snippet": (p.description or "")[:160],
+                        "view": "projects", "ref": p.id})
+        for tk in (db.query(T).filter(T.tenant_id == t)
+                   .filter(T.title.ilike(like) | T.description.ilike(like)).limit(limit).all()):
+            out.append({"type": "Aufgabe", "icon": "check-square", "id": tk.id,
+                        "title": tk.title, "snippet": (tk.description or "")[:160],
+                        "view": "projects", "ref": tk.project_id})
+        for m in (db.query(Me).filter(Me.tenant_id == t)
+                  .filter(Me.subject.ilike(like) | Me.body.ilike(like))
+                  .order_by(Me.id.desc()).limit(limit).all()):
+            out.append({"type": "Nachricht", "icon": "mail", "id": m.id,
+                        "title": m.subject or "(ohne Betreff)", "snippet": (m.body or "")[:160],
+                        "view": "inbox", "ref": None})
+        for a in (db.query(A).filter(A.tenant_id == t)
+                  .filter(A.name.ilike(like) | A.role.ilike(like)).limit(limit).all()):
+            out.append({"type": "Agent", "icon": "user", "id": a.id,
+                        "title": a.name, "snippet": a.role, "view": "org", "ref": a.id})
+        for r in (db.query(Ru).filter(Ru.tenant_id == t)
+                  .filter(Ru.title.ilike(like) | Ru.content.ilike(like)).limit(limit).all()):
+            out.append({"type": "Regel", "icon": "book", "id": r.id,
+                        "title": r.title, "snippet": (r.content or "")[:160],
+                        "view": "cookbook", "ref": None})
+    finally:
+        db.close()
+    # Wissensspeicher (semantisch)
+    try:
+        for h in knowledge.search(term, limit):
+            out.append({"type": "Wissen", "icon": "brain", "id": None,
+                        "title": h["source"], "snippet": h["snippet"],
+                        "view": "knowledge", "ref": None})
+    except Exception:  # noqa: BLE001
+        pass
+    return {"results": out[:40], "query": term}
 
 
 # --------------------------------------------------------------------------- #

@@ -7,9 +7,18 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=sqlite:////data/aihub.db
+      # Standard: SQLite. Für Postgres das Profil "postgres" starten und hier
+      # z. B. DATABASE_URL=postgresql+psycopg://aihub:aihub@postgres:5432/aihub setzen.
+      - DATABASE_URL=${DATABASE_URL:-sqlite:////data/aihub.db}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - SLACK_WEBHOOK=${SLACK_WEBHOOK:-}
+      - DISCORD_WEBHOOK=${DISCORD_WEBHOOK:-}
+      - APP_SECRET_KEY=${APP_SECRET_KEY:-}
+      - IP_ALLOWLIST=${IP_ALLOWLIST:-}
       - BRAVE_API_KEY=${BRAVE_API_KEY:-}
       - SMTP_HOST=${SMTP_HOST:-}
       - SMTP_PORT=${SMTP_PORT:-587}
@@ -60,6 +69,26 @@ services:
       - aihub-data:/data
     restart: unless-stopped
 
+  # PostgreSQL (optional). Nur mit Profil starten:
+  #   docker compose --profile postgres up -d
+  # und in der App DATABASE_URL passend setzen (siehe oben).
+  postgres:
+    image: postgres:16-alpine
+    container_name: aihub-postgres
+    profiles: ["postgres"]
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-aihub}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aihub}
+      - POSTGRES_DB=${POSTGRES_DB:-aihub}
+    volumes:
+      - aihub-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aihub}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   # Lokale Modelle (optional). Modelle vorher ziehen, z. B.:
   #   docker exec -it aihub-ollama ollama pull llama3.1
   ollama:
@@ -75,3 +104,4 @@ volumes:
   aihub-data:
   aihub-vault:
   ollama-data:
+  aihub-pgdata:
