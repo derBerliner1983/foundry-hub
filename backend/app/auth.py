@@ -95,7 +95,8 @@ def otpauth_uri(username: str, secret: str) -> str:
     return f"otpauth://totp/AI-Hub:{username}?secret={secret}&issuer=AI-Hub"
 
 
-def login(username: str, password: str, code: str = None):
+def login(username: str, password: str, code: str = None,
+          user_agent: str = "", ip: str = ""):
     """Gibt (token, error) zurück. error: None | 'locked' | 'invalid' | '2fa'."""
     if _is_locked(username):
         return None, "locked"
@@ -110,9 +111,59 @@ def login(username: str, password: str, code: str = None):
         _fails.pop(username, None)
         token = pysecrets.token_urlsafe(32)
         db.add(DBSession(token=token, user_id=u.id, active_tenant_id=u.id,
-                         expires_at=datetime.utcnow() + timedelta(days=SESSION_DAYS)))
+                         expires_at=datetime.utcnow() + timedelta(days=SESSION_DAYS),
+                         user_agent=(user_agent or "")[:300], ip=(ip or "")[:64]))
         db.commit()
         return token, None
+    finally:
+        db.close()
+
+
+def list_sessions(user_id: int, current_token: str = "") -> list:
+    """Aktive Sitzungen eines Nutzers (für die Sitzungsverwaltung)."""
+    db = SessionLocal()
+    try:
+        out = []
+        for s in (db.query(DBSession).filter(DBSession.user_id == user_id)
+                  .order_by(DBSession.created_at.desc()).all()):
+            out.append({
+                "id": s.token[:12],
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+                "last_seen": s.last_seen.isoformat() if s.last_seen else None,
+                "user_agent": s.user_agent or "",
+                "ip": s.ip or "",
+                "current": s.token == current_token,
+            })
+        return out
+    finally:
+        db.close()
+
+
+def revoke_session(user_id: int, session_id: str) -> bool:
+    """Beendet eine bestimmte Sitzung (per Kurz-ID = erste 12 Zeichen)."""
+    db = SessionLocal()
+    try:
+        for s in db.query(DBSession).filter(DBSession.user_id == user_id).all():
+            if s.token[:12] == session_id:
+                db.delete(s)
+                db.commit()
+                return True
+        return False
+    finally:
+        db.close()
+
+
+def revoke_other_sessions(user_id: int, keep_token: str) -> int:
+    """Beendet alle Sitzungen außer der aktuellen."""
+    db = SessionLocal()
+    try:
+        n = 0
+        for s in db.query(DBSession).filter(DBSession.user_id == user_id).all():
+            if s.token != keep_token:
+                db.delete(s)
+                n += 1
+        db.commit()
+        return n
     finally:
         db.close()
 
@@ -176,6 +227,14 @@ def current(request) -> dict | None:
         u = db.get(User, s.user_id)
         if not u:
             return None
+        # last_seen höchstens minütlich aktualisieren (spart Schreiblast)
+        try:
+            now = datetime.utcnow()
+            if not s.last_seen or (now - s.last_seen).total_seconds() > 60:
+                s.last_seen = now
+                db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
         return {"user_id": u.id, "username": u.username, "is_owner": u.is_owner,
                 "tenant_id": s.active_tenant_id, "token": token}
     finally:

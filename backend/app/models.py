@@ -45,6 +45,9 @@ class Session(Base):
     active_tenant_id = Column(Integer, nullable=False)  # gerade betrachtete Firma
     created_at = Column(DateTime, default=now)
     expires_at = Column(DateTime, nullable=True)
+    last_seen = Column(DateTime, default=now)
+    user_agent = Column(String, default="")
+    ip = Column(String, default="")
 
 
 class Access(Base):
@@ -99,7 +102,11 @@ class Settings(Base):
     email_notifications = Column(Boolean, default=False)
     notify_overdue = Column(Boolean, default=True)
     notify_questions = Column(Boolean, default=True)
+    daily_digest = Column(Boolean, default=False)   # tägliche Zusammenfassung per Mail
     assistant_email_access = Column(Boolean, default=False)  # Daily-Assistant darf Mails lesen
+    # Automatische Sicherungen
+    auto_backup = Column(Boolean, default=False)    # tägliche Voll-Sicherung nach /data/backups
+    backup_keep = Column(Integer, default=7)        # wie viele Sicherungen behalten
 
 
 class Project(Base):
@@ -148,6 +155,7 @@ class Task(Base):
     parent_task_id = Column(Integer, ForeignKey("tasks.id"), nullable=True)
     milestone_id = Column(Integer, ForeignKey("milestones.id"), nullable=True)
     status = Column(String, default="todo")  # todo | in_progress | done | failed
+    depends_on = Column(String, default="")  # CSV von Task-IDs, die zuerst fertig sein müssen
     result = Column(Text, default="")
     exec_count = Column(Integer, default=0)  # Anzahl ausgeführter Befehle (Limit)
     verified = Column(Boolean, default=False)  # erfolgreicher Test/Smoke-Check gelaufen?

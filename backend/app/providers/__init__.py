@@ -1,6 +1,7 @@
 """Provider-Auswahl: liefert für (provider, model) eine Chat-Funktion."""
 from .base import LLMResult, MockProvider
 from .claude import ClaudeProvider
+from .extra import GeminiProvider, OpenAICompat
 from .openai_provider import OpenAIProvider
 from .ollama import OllamaProvider
 
@@ -8,6 +9,9 @@ _PROVIDERS = {
     "claude": ClaudeProvider(),
     "openai": OpenAIProvider(),
     "ollama": OllamaProvider(),
+    "openrouter": OpenAICompat("openrouter", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
+    "mistral": OpenAICompat("mistral", "https://api.mistral.ai/v1", "MISTRAL_API_KEY"),
+    "gemini": GeminiProvider(),
     "mock": MockProvider(),
 }
 

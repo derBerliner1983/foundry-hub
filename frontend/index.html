@@ -40,6 +40,11 @@
       <div class="topbar">
         <h1 id="view-title">Dashboard</h1>
         <div class="spacer"></div>
+        <div id="gsearch-wrap" style="position:relative">
+          <input id="gsearch" placeholder="Suchen … (Projekte, Aufgaben, Wissen)" autocomplete="off"
+                 style="width:280px;margin:0;padding:6px 10px"/>
+          <div id="gsearch-results" class="hidden"></div>
+        </div>
         <select id="tenant-switch" class="hidden" style="width:auto;margin:0;padding:5px 9px"></select>
         <span class="muted hidden" id="user-label"></span>
         <button class="btn ghost sm hidden" id="logout-btn"><i data-lucide="log-out"></i></button>
