@@ -155,6 +155,7 @@ class Task(Base):
     parent_task_id = Column(Integer, ForeignKey("tasks.id"), nullable=True)
     milestone_id = Column(Integer, ForeignKey("milestones.id"), nullable=True)
     status = Column(String, default="todo")  # todo | in_progress | done | failed
+    depends_on = Column(String, default="")  # CSV von Task-IDs, die zuerst fertig sein müssen
     result = Column(Text, default="")
     exec_count = Column(Integer, default=0)  # Anzahl ausgeführter Befehle (Limit)
     verified = Column(Boolean, default=False)  # erfolgreicher Test/Smoke-Check gelaufen?

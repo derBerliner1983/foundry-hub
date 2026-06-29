@@ -441,13 +441,22 @@ async function renderTasks() {
     <div class="kanban">${Object.keys(cols).map(k => `
       <div class="kcol" data-status="${k}" ondragover="event.preventDefault()" ondrop="dropTask(event,'${k}')">
         <div class="kcol-head">${cols[k]} <span class="tag">${(groups[k] || []).length}</span></div>
-        ${(groups[k] || []).map(t => `<div class="kcard" draggable="true" ondragstart="event.dataTransfer.setData('id','${t.id}')">
+        ${(groups[k] || []).map(t => `<div class="kcard${t.blocked ? ' blocked' : ''}" draggable="true" ondragstart="event.dataTransfer.setData('id','${t.id}')">
           <b>#${t.id} ${esc(t.title)}</b>
           <div class="muted" style="font-size:12px">${esc((t.description || '').slice(0, 90))}</div>
-          ${t.result ? `<div class="tag" style="margin-top:4px">${esc(t.result.slice(0, 80))}</div>` : ''}</div>`).join("")}
+          ${t.blocked ? `<div class="tag" style="margin-top:4px;color:var(--yellow)">⛔ blockiert: wartet auf #${esc(t.depends_on)}</div>` : ''}
+          ${t.depends_on && !t.blocked ? `<div class="tag" style="margin-top:4px">↳ nach #${esc(t.depends_on)}</div>` : ''}
+          ${t.result ? `<div class="tag" style="margin-top:4px">${esc(t.result.slice(0, 80))}</div>` : ''}
+          <div style="margin-top:6px"><button class="btn ghost sm" onclick="editDeps(${t.id},'${esc(t.depends_on || '')}')"><i data-lucide="link"></i> Abhängigkeiten</button></div></div>`).join("")}
       </div>`).join("")}</div>`;
   icons();
 }
+window.editDeps = async (id, current) => {
+  const v = prompt("Diese Aufgabe startet erst, wenn folgende Aufgaben-IDs erledigt sind (kommagetrennt, leer = keine):", current);
+  if (v === null) return;
+  await api.put("/api/tasks/" + id, { depends_on: v });
+  renderTasks();
+};
 window.dropTask = async (e, status) => {
   e.preventDefault();
   const id = e.dataTransfer.getData("id"); if (!id) return;
@@ -564,8 +573,10 @@ async function loadWorkshop() {
   if (gEl) gEl.innerHTML = git.history.length ? git.history.map(h => `<div class="agent-row" style="padding:8px 11px">
     <i data-lucide="${h.verified ? 'badge-check' : 'git-commit'}" style="width:16px;color:${h.verified ? 'var(--green)' : 'var(--text-dim)'}"></i>
     <div class="info"><b style="font-size:13px">${esc(h.message)}</b><small>${esc(h.date)} · ${esc(h.sha)}</small></div>
+    <button class="btn ghost sm" onclick="showDiff('${esc(h.sha)}')"><i data-lucide="file-diff"></i> Diff</button>
     <button class="btn ghost sm" onclick="rollbackTo('${esc(h.sha)}')"><i data-lucide="rotate-ccw"></i> hierhin zurück</button></div>`).join("")
     : `<div class="muted">Noch keine Versionen. Sie entstehen automatisch, wenn Agenten Dateien ändern.</div>`;
+  if (gEl && !document.getElementById("ws-diff")) gEl.insertAdjacentHTML("afterend", `<pre id="ws-diff" class="diff-view hidden"></pre>`);
   const cons = await api.get("/api/console?project_id=" + wsProject);
   const cEl = document.getElementById("ws-console");
   cEl.innerHTML = cons.length ? cons.map(e =>
@@ -585,6 +596,25 @@ window.rollbackTo = async function (sha) {
   if (!r.ok) alert("Rollback fehlgeschlagen: " + (r.stderr || ""));
   loadWorkshop();
 };
+window.showDiff = async function (sha) {
+  const el = document.getElementById("ws-diff");
+  if (!el) return;
+  el.classList.remove("hidden");
+  el.textContent = "lade Diff …";
+  const r = await api.get(`/api/git/diff?project_id=${wsProject || ''}&commit=${encodeURIComponent(sha)}`);
+  const txt = ((r.stat ? r.stat + "\n\n" : "") + (r.diff || "")).trim();
+  el.innerHTML = txt ? colorizeDiff(txt) : "(keine Änderungen)";
+  el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+};
+function colorizeDiff(txt) {
+  return txt.split("\n").map(l => {
+    const e = esc(l);
+    if (l.startsWith("+") && !l.startsWith("+++")) return `<span class="d-add">${e}</span>`;
+    if (l.startsWith("-") && !l.startsWith("---")) return `<span class="d-del">${e}</span>`;
+    if (l.startsWith("@@")) return `<span class="d-hunk">${e}</span>`;
+    return e;
+  }).join("\n");
+}
 
 // ---------- Projekte ----------
 async function renderProjects() {

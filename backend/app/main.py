@@ -884,13 +884,17 @@ def list_tasks():
         tasks = db.query(Task).filter(Task.tenant_id == context.tid()).order_by(Task.id.desc()).limit(200).all()
         return [{"id": t.id, "title": t.title, "description": t.description,
                  "status": t.status, "assigned_agent_id": t.assigned_agent_id,
-                 "milestone_id": t.milestone_id, "result": t.result} for t in tasks]
+                 "milestone_id": t.milestone_id, "result": t.result,
+                 "depends_on": t.depends_on or "",
+                 "blocked": (t.status in ("todo", "in_progress") and not orch.task_deps_met(db, t))}
+                for t in tasks]
     finally:
         db.close()
 
 
 class TaskUpdate(BaseModel):
     status: str | None = None
+    depends_on: str | None = None
 
 
 @app.put("/api/tasks/{task_id}")
@@ -905,6 +909,15 @@ def update_task(task_id: int, u: TaskUpdate):
             if u.status == "done":
                 t.verified = True
                 orch._refresh_milestone_status(db, t.milestone_id, None)
+        if u.depends_on is not None:
+            # nur gültige, andere Task-IDs der gleichen Firma zulassen (keine Selbst-Abhängigkeit)
+            ids = []
+            for p in u.depends_on.replace(" ", "").split(","):
+                if p.isdigit() and int(p) != task_id:
+                    dt = db.get(Task, int(p))
+                    if dt and dt.tenant_id == context.tid():
+                        ids.append(p)
+            t.depends_on = ",".join(ids)
         db.commit()
         return {"ok": True}
     finally:
@@ -1476,6 +1489,11 @@ def preview_stop():
 @app.get("/api/git/history")
 def git_history(project_id: int | None = None):
     return {"history": workspace.git_history(project_id)}
+
+
+@app.get("/api/git/diff")
+def git_diff(commit: str, project_id: int | None = None, base: str = ""):
+    return workspace.git_diff(project_id, commit, base)
 
 
 class RollbackIn(BaseModel):

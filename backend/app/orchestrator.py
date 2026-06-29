@@ -787,6 +787,21 @@ def _next_agent_to_act(db, tenants):
     return None
 
 
+def task_deps_met(db, task) -> bool:
+    """True, wenn alle Abhängigkeiten (depends_on) der Aufgabe erledigt sind."""
+    dep = (task.depends_on or "").strip()
+    if not dep:
+        return True
+    for part in dep.split(","):
+        part = part.strip()
+        if not part.isdigit():
+            continue
+        dt = db.get(Task, int(part))
+        if dt and dt.status != "done":
+            return False
+    return True
+
+
 async def run_agent_turn(db, agent: Agent):
     context.set_tenant(agent.tenant_id)
     settings = get_settings(db, agent.tenant_id)
@@ -819,6 +834,11 @@ async def run_agent_turn(db, agent: Agent):
             project_ctx = m.project_id
         m.is_read = True
     for t in tasks:
+        if not task_deps_met(db, t):
+            # Aufgabe ist durch noch offene Abhängigkeiten blockiert -> überspringen
+            context_lines.append(
+                f"BLOCKIERTE AUFGABE #{t.id}: [{t.title}] wartet auf {t.depends_on}")
+            continue
         context_lines.append(f"OFFENE AUFGABE #{t.id}: [{t.title}] {t.description}")
         if t.status == "todo":
             t.status = "in_progress"

@@ -178,6 +178,29 @@ def git_rollback(project_id, commit: str) -> dict:
     return _ws_exec(project_id, f"{_GIT} reset --hard {safe}")
 
 
+def git_diff(project_id, commit: str, base: str = "") -> dict:
+    """Liefert den Diff eines Commits (gegen seinen Vorgänger oder gegen `base`)."""
+    safe = "".join(c for c in (commit or "") if c.isalnum())
+    if not safe:
+        return {"ok": False, "diff": "", "stderr": "Ungültiger Commit"}
+    base_safe = "".join(c for c in (base or "") if c.isalnum())
+    if base_safe:
+        rng = f"{base_safe} {safe}"
+    else:
+        rng = f"{safe}~1 {safe}"
+    res = _ws_exec(project_id, f"{_GIT} diff --stat --no-color {rng}; echo '---DIFF---'; "
+                              f"{_GIT} diff --no-color {rng}")
+    out = res.get("stdout", "")
+    stat, _, body = out.partition("---DIFF---")
+    if not body.strip():
+        # z. B. erster Commit ohne Vorgänger -> kompletten Commit-Inhalt zeigen
+        res2 = _ws_exec(project_id, f"{_GIT} show --no-color {safe}")
+        d2 = res2.get("stdout", "")
+        if d2.strip():
+            return {"ok": True, "stat": "", "diff": d2[:200000]}
+    return {"ok": True, "stat": stat.strip(), "diff": body.strip()[:200000]}
+
+
 def reset_workspace(project_id, path: str = "") -> dict:
     """Löscht installierte Software/Builds wieder (innerhalb des Projekt-Workspace)."""
     if config.SANDBOX_URL:
