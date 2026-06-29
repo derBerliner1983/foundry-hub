@@ -32,8 +32,12 @@ services:
       - IMAP_PASS=${IMAP_PASS:-}
       - IMAP_SSL=${IMAP_SSL:-true}
       - NOTIFY_EMAIL=${NOTIFY_EMAIL:-}
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - OLLAMA_AUTO_MODEL=${OLLAMA_AUTO_MODEL:-llama3.2:1b}
+      # Ollama: Standard zeigt auf eine bereits vorhandene Instanz auf dem Host
+      # (host.docker.internal). Wer den mitgelieferten Ollama-Container nutzt
+      # (Profil "ollama"), setzt in der .env OLLAMA_BASE_URL=http://ollama:11434.
+      # Lässt sich auch jederzeit in der GUI ändern.
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OLLAMA_AUTO_MODEL=${OLLAMA_AUTO_MODEL:-}
       - DEFAULT_CHEF_PROVIDER=${DEFAULT_CHEF_PROVIDER:-claude}
       - DEFAULT_CHEF_MODEL=${DEFAULT_CHEF_MODEL:-claude-opus-4-8}
       - DEFAULT_WORKER_PROVIDER=${DEFAULT_WORKER_PROVIDER:-claude}
@@ -49,8 +53,10 @@ services:
       # Für Obsidian: hier deinen Vault-Ordner einhängen, z. B.:
       #   - /pfad/zu/deinem/Obsidian-Vault:/data/vault
       - foundryhub-vault:/data/vault
+    extra_hosts:
+      # erlaubt dem Container, eine auf dem Host laufende Ollama-Instanz zu erreichen
+      - "host.docker.internal:host-gateway"
     depends_on:
-      - ollama
       - sandbox
     restart: unless-stopped
 
@@ -89,11 +95,16 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # Lokale Modelle (optional). Modelle vorher ziehen, z. B.:
-  #   docker exec -it foundryhub-ollama ollama pull llama3.1
+  # Lokale Modelle (OPTIONAL und standardmäßig AUS).
+  # Nur starten, wenn du KEIN eigenes Ollama auf dem Host hast:
+  #   docker compose --profile ollama up -d
+  # Modelle ziehen:  docker exec -it foundryhub-ollama ollama pull llama3.1
+  # Hast du bereits Ollama auf dem Host, lass dieses Profil weg – die App
+  # erreicht es über host.docker.internal (siehe OLLAMA_BASE_URL oben).
   ollama:
     image: ollama/ollama:latest
     container_name: foundryhub-ollama
+    profiles: ["ollama"]
     ports:
       - "11434:11434"
     volumes:

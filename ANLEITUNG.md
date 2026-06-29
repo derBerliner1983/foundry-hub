@@ -6,7 +6,8 @@ findest du in der [README](README.md).
 ## 0. Voraussetzungen
 
 - Ein Server/Rechner mit **Docker** und **Docker Compose** (Linux empfohlen).
-  Installation: <https://docs.docker.com/get-docker/>
+  Fehlt eines davon, bietet `./install.sh` auf Debian/Ubuntu an, es per `apt`
+  automatisch zu installieren. Manuell: <https://docs.docker.com/get-docker/>
 - Port **8000** muss frei sein (oder du legst deinen Reverse-Proxy davor).
 
 ## 1. Herunterladen
@@ -61,9 +62,18 @@ Weitere Nutzer erstellst du später unter **Nutzer & Teilen** (nur der Owner dar
 | SMTP (Host/User/Pass/From) | E-Mail senden + Benachrichtigungen |
 | IMAP (Host/User/Pass) | E-Mails lesen (Daily-Assistent) |
 
-> Ohne Keys läuft alles trotzdem über einen **Mock** (Demo). Lokale Modelle gehen
-> über **Ollama** (`docker exec -it foundryhub-ollama ollama pull llama3.1`, dann in
-> den Einstellungen Provider `ollama` wählen).
+> Ohne Keys läuft alles trotzdem über einen **Mock** (Demo).
+>
+> **Lokale Modelle (Ollama)** – beim `./install.sh` wirst du gefragt:
+> 1. **Vorhandenes Ollama auf dem Host nutzen** (kein zweiter Container). Die App
+>    erreicht es über `host.docker.internal:11434`. Wichtig: dein Ollama muss
+>    über das Netz lauschen (`OLLAMA_HOST=0.0.0.0`), nicht nur auf `127.0.0.1`.
+> 2. **Ollama-Container mitstarten** (`docker compose --profile ollama up -d`) –
+>    nur wenn du noch kein Ollama hast (sonst Port-Konflikt auf 11434).
+> 3. **Ohne Ollama** (nur Cloud/Mock).
+>
+> Die Ollama-URL und die Modelle (ziehen/laden/entladen) verwaltest du jederzeit
+> in der GUI unter *Einstellungen → Lokale Modelle (Ollama)* → **Verbinden**.
 >
 > **Zugangsdaten werden verschlüsselt** in der Datenbank gespeichert (nie im
 > Klartext, nie an die Oberfläche zurückgegeben). Für portable Backups einen
