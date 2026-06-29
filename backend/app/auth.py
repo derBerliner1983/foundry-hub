@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from .database import SessionLocal
 from .models import Access, Session as DBSession, User
 
-COOKIE = "aihub_session"
+COOKIE = "foundryhub_session"
 SESSION_DAYS = 30
 MAX_FAILS = 5          # Fehlversuche bis zur Sperre
 LOCKOUT_MINUTES = 15   # Sperrdauer
@@ -92,7 +92,7 @@ def totp_verify(secret: str, code: str) -> bool:
 
 
 def otpauth_uri(username: str, secret: str) -> str:
-    return f"otpauth://totp/AI-Hub:{username}?secret={secret}&issuer=AI-Hub"
+    return f"otpauth://totp/Foundry-Hub:{username}?secret={secret}&issuer=Foundry-Hub"
 
 
 def login(username: str, password: str, code: str = None,

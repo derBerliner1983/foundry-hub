@@ -1,4 +1,4 @@
-# AI-Hub – Schnellanleitung
+# Foundry-Hub – Schnellanleitung
 
 Kurzanleitung zum Starten und Einrichten. Ausführliche Funktionsbeschreibung
 findest du in der [README](README.md).
@@ -62,13 +62,13 @@ Weitere Nutzer erstellst du später unter **Nutzer & Teilen** (nur der Owner dar
 | IMAP (Host/User/Pass) | E-Mails lesen (Daily-Assistent) |
 
 > Ohne Keys läuft alles trotzdem über einen **Mock** (Demo). Lokale Modelle gehen
-> über **Ollama** (`docker exec -it aihub-ollama ollama pull llama3.1`, dann in
+> über **Ollama** (`docker exec -it foundryhub-ollama ollama pull llama3.1`, dann in
 > den Einstellungen Provider `ollama` wählen).
 >
 > **Zugangsdaten werden verschlüsselt** in der Datenbank gespeichert (nie im
 > Klartext, nie an die Oberfläche zurückgegeben). Für portable Backups einen
 > festen `APP_SECRET_KEY` setzen – sonst wird einmalig ein Zufallsschlüssel unter
-> `/data/.aihub_key` erzeugt.
+> `/data/.foundryhub_key` erzeugt.
 
 ## 5. Obsidian-Vault (optional, „Gehirn")
 
@@ -80,7 +80,7 @@ In `docker-compose.yml` deinen Vault-Ordner einhängen und neu starten:
 ```
 
 Agenten schreiben dann Notizen dorthin, du bearbeitest sie in Obsidian; die
-Wissenssuche bezieht sie ein (Ordner `AI-Hub/tenant_<id>/`).
+Wissenssuche bezieht sie ein (Ordner `Foundry-Hub/tenant_<id>/`).
 
 ## 6. Öffentlich erreichbar (Pangolin/Newt, Traefik, Caddy …)
 
@@ -135,7 +135,7 @@ Docker-Volumes und bleiben erhalten.
 ## 10. Betrieb & Sicherheit (optional)
 
 - **PostgreSQL** statt SQLite: `docker compose --profile postgres up -d` und
-  `DATABASE_URL=postgresql+psycopg://aihub:aihub@postgres:5432/aihub` setzen.
+  `DATABASE_URL=postgresql+psycopg://foundryhub:foundryhub@postgres:5432/foundryhub` setzen.
 - **IP-Allowlist**: `IP_ALLOWLIST=10.0.0.0/8,1.2.3.4` (CSV/CIDR) beschränkt den
   Zugriff; zusätzlich gilt ein Rate-Limit pro IP (Login & API).
 - **Metriken**: `GET /api/metrics` (JSON) und `/api/metrics/prometheus`.

@@ -10,7 +10,7 @@ import shlex
 import httpx
 
 PROTOCOL_VERSION = "2024-11-05"
-CLIENT_INFO = {"name": "ai-hub", "version": "1.0"}
+CLIENT_INFO = {"name": "foundry-hub", "version": "1.0"}
 TIMEOUT = 20
 
 

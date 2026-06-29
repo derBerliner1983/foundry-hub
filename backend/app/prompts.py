@@ -82,7 +82,7 @@ def build_system_prompt(agent, settings, team_summary: str,
     skills_block = f"\nVERFÜGBARE SKILLS (mit use_skill nutzbar):\n{skills_text}\n" if skills_text else ""
     mcp_block = f"\nVERFÜGBARE MCP-WERKZEUGE (Server, die du anfragen kannst):\n{mcp_text}\n" if mcp_text else ""
 
-    return f"""Du bist ein KI-Mitarbeiter in der Firma "AI-Hub".
+    return f"""Du bist ein KI-Mitarbeiter in der Firma "Foundry-Hub".
 ROLLE: {role} ({role_title(role)})
 DEIN NAME: {agent.name}
 AUFGABE DER ROLLE: {info.get('desc', '')}

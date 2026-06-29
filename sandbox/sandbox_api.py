@@ -14,7 +14,7 @@ import subprocess
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-app = FastAPI(title="AI-Hub Sandbox")
+app = FastAPI(title="Foundry-Hub Sandbox")
 ROOT = os.path.realpath(os.getenv("WORKSPACE_DIR", "/data/workspace"))
 os.makedirs(ROOT, exist_ok=True)
 

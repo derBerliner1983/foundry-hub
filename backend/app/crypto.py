@@ -7,7 +7,7 @@ Geheimnisse aber deutlich über Klartext in der Datenbank.
 
 Der Hauptschlüssel kommt aus ``APP_SECRET_KEY`` (Env). Ist nichts gesetzt,
 wird einmalig ein zufälliger Schlüssel erzeugt und neben der Datenbank unter
-``.aihub_key`` abgelegt. Werte, die nicht als Token erkennbar sind (Altbestand
+``.foundryhub_key`` abgelegt. Werte, die nicht als Token erkennbar sind (Altbestand
 in Klartext), werden unverändert zurückgegeben – so bleibt alles abwärts­
 kompatibel."""
 import base64
@@ -19,7 +19,7 @@ _PREFIX = b"enc1:"  # Kennung für verschlüsselte Werte
 
 
 def _data_dir() -> str:
-    url = os.getenv("DATABASE_URL", "sqlite:////data/aihub.db")
+    url = os.getenv("DATABASE_URL", "sqlite:////data/foundryhub.db")
     if url.startswith("sqlite") and "/" in url:
         path = url.split("///")[-1]
         d = os.path.dirname(path) or "."
@@ -33,12 +33,26 @@ def _load_master() -> bytes:
     if env:
         return hashlib.sha256(env.encode()).digest()
     # sonst persistenten Zufallsschlüssel verwenden/erzeugen
-    path = os.path.join(_data_dir(), ".aihub_key")
+    path = os.path.join(_data_dir(), ".foundryhub_key")
+    # Abwärtskompatibel: früheren Schlüssel (.aihub_key) übernehmen, falls vorhanden
+    legacy = os.path.join(_data_dir(), ".aihub_key")
     try:
         if os.path.exists(path):
             with open(path, "rb") as f:
                 raw = f.read().strip()
                 if raw:
+                    return hashlib.sha256(raw).digest()
+        if os.path.exists(legacy):
+            with open(legacy, "rb") as f:
+                raw = f.read().strip()
+                if raw:
+                    # alten Schlüssel auf neuen Namen übernehmen (einmalig)
+                    try:
+                        with open(path, "wb") as nf:
+                            nf.write(raw)
+                        os.chmod(path, 0o600)
+                    except OSError:
+                        pass
                     return hashlib.sha256(raw).digest()
         raw = base64.b64encode(os.urandom(32))
         with open(path, "wb") as f:
@@ -50,7 +64,7 @@ def _load_master() -> bytes:
         return hashlib.sha256(raw).digest()
     except OSError:
         # Fallback: deterministisch aus Maschinen-/Prozessinfo (besser als nichts)
-        return hashlib.sha256(b"aihub-fallback-key").digest()
+        return hashlib.sha256(b"foundryhub-fallback-key").digest()
 
 
 _MASTER = _load_master()

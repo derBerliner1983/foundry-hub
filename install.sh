@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# AI-Hub – Installations-/Startskript
+# Foundry-Hub – Installations-/Startskript
 # Prüft Docker, legt .env an, baut und startet die Container.
 #
 set -euo pipefail
@@ -83,12 +83,12 @@ done
 read -r -p "Lokales Ollama-Modell jetzt ziehen? (Name z. B. 'llama3.1', leer = überspringen) " model || true
 if [ -n "${model:-}" ]; then
   info "Ziehe Modell '$model' (kann dauern) …"
-  docker exec -i aihub-ollama ollama pull "$model" || warn "Konnte Modell nicht ziehen."
+  docker exec -i foundryhub-ollama ollama pull "$model" || warn "Konnte Modell nicht ziehen."
 fi
 
 # 7) Fertig -----------------------------------------------------------------
 echo
-info "Fertig!  AI-Hub läuft auf:  http://localhost:8000"
+info "Fertig!  Foundry-Hub läuft auf:  http://localhost:8000"
 info "Erster Aufruf: lege das Owner-Konto an (Benutzername + Passwort)."
 info "Logs ansehen:  $COMPOSE logs -f app"
 info "Stoppen:       $COMPOSE down"

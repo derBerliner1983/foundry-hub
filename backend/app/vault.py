@@ -2,7 +2,7 @@
 
 Eine Vault ist nur ein Ordner mit Markdown-Dateien. Agenten schreiben/lesen
 Notizen, der Nutzer sieht & bearbeitet sie in Obsidian. Pro Firma ein Unterordner
-unter <VAULT>/AI-Hub/tenant_<id>/, damit es mit einer bestehenden Vault koexistiert."""
+unter <VAULT>/Foundry-Hub/tenant_<id>/, damit es mit einer bestehenden Vault koexistiert."""
 import os
 import re
 
@@ -16,7 +16,7 @@ def enabled() -> bool:
 
 def _root(tenant=None) -> str:
     t = tenant if tenant is not None else context.tid()
-    root = os.path.join(config.OBSIDIAN_VAULT, "AI-Hub", f"tenant_{t}")
+    root = os.path.join(config.OBSIDIAN_VAULT, "Foundry-Hub", f"tenant_{t}")
     os.makedirs(root, exist_ok=True)
     return root
 

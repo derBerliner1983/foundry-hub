@@ -61,7 +61,7 @@ def maybe_notify(db, kind, subject, body):
     if kind == "overdue" and not s.notify_overdue:
         return
     import httpx
-    text = f"[AI-Hub] {subject}\n{body}"
+    text = f"[Foundry-Hub] {subject}\n{body}"
     # Telegram (falls konfiguriert)
     if s.telegram_token and s.telegram_chat_id:
         try:
@@ -87,7 +87,7 @@ def maybe_notify(db, kind, subject, body):
     if not to or not email_util.smtp_configured():
         return
     try:
-        email_util.send_email(to, "[AI-Hub] " + subject, body)
+        email_util.send_email(to, "[Foundry-Hub] " + subject, body)
         log(db, "email", f"Benachrichtigung gesendet: {subject}")
     except Exception as e:  # noqa: BLE001
         log(db, "error", f"E-Mail-Fehler: {e}")
@@ -398,7 +398,7 @@ async def execute_actions(db, agent: Agent, settings: Settings, parsed: dict,
 
         elif atype == "github_push":
             from . import github_util
-            res = github_util.push_project(pctx, act.get("repo", "ai-hub-projekt"), True)
+            res = github_util.push_project(pctx, act.get("repo", "foundry-hub-projekt"), True)
             log(db, "git", f"GitHub-Push: {res.get('url') or res.get('error')}", agent_id=agent.id)
             send_message(db, sender_kind="system", sender_agent_id=None,
                          recipient_kind="agent", recipient_agent_id=agent.id,
@@ -1031,7 +1031,7 @@ def build_digest(db, tenant_id) -> str:
     questions = db.query(Message).filter(Message.tenant_id == tenant_id, Message.recipient_kind == "user",
                                          Message.requires_answer == True, Message.answered == False).count()  # noqa: E712
     spent = tenant_spend(db, tenant_id)
-    return (f"Tagesüberblick AI-Hub\n\n"
+    return (f"Tagesüberblick Foundry-Hub\n\n"
             f"• Projekte aktiv: {projects}\n"
             f"• Aufgaben erledigt: {done}/{total}\n"
             f"• Überfällige Meilensteine: {overdue}\n"

@@ -39,7 +39,7 @@ from .models import (
 from .roles import ROLES, role_title
 from .seed import ensure_seed
 
-app = FastAPI(title="AI-Hub", version="1.0")
+app = FastAPI(title="Foundry-Hub", version="1.0")
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "frontend")
 
@@ -1978,7 +1978,7 @@ def knowledge_web(w: WebIngest):
     from .models import Document
     try:
         r = httpx.get(w.url, timeout=20, follow_redirects=True,
-                      headers={"User-Agent": "ai-hub/1.0"})
+                      headers={"User-Agent": "foundry-hub/1.0"})
         r.raise_for_status()
         html = r.text
     except Exception as e:  # noqa: BLE001
@@ -2129,7 +2129,7 @@ def _build_full_backup_zip(dest_path: str = None) -> str:
                     for fn in files:
                         full = os.path.join(base, fn)
                         z.write(full, "workspace/" + os.path.relpath(full, config.WORKSPACE_DIR))
-        vroot = os.path.join(config.OBSIDIAN_VAULT, "AI-Hub", f"tenant_{t}")
+        vroot = os.path.join(config.OBSIDIAN_VAULT, "Foundry-Hub", f"tenant_{t}")
         if os.path.isdir(vroot):
             for base, _d, files in os.walk(vroot):
                 for fn in files:
@@ -2149,7 +2149,7 @@ def backup_full(request: Request):
     """Vollständiges Backup als ZIP: DB-Snapshot (JSON) + Workspaces + Vault."""
     t = context.tid()
     path = _build_full_backup_zip()
-    return FileResponse(path, filename=f"ai-hub-backup-tenant-{t}.zip", media_type="application/zip")
+    return FileResponse(path, filename=f"foundry-hub-backup-tenant-{t}.zip", media_type="application/zip")
 
 
 class ConfigImport(BaseModel):
@@ -2270,7 +2270,7 @@ async def backup_restore_full(file: UploadFile = File(...)):
                 rel = name[len("vault/"):]
                 if not rel or rel.endswith("/"):
                     continue
-                vroot = os.path.join(config.OBSIDIAN_VAULT, "AI-Hub", f"tenant_{t}")
+                vroot = os.path.join(config.OBSIDIAN_VAULT, "Foundry-Hub", f"tenant_{t}")
                 dest = os.path.realpath(os.path.join(vroot, rel))
                 if not dest.startswith(os.path.realpath(vroot)):
                     continue
@@ -2561,15 +2561,15 @@ def metrics_prometheus(request: Request):
     from fastapi.responses import PlainTextResponse
     m = metrics(request)
     lines = [
-        "# HELP aihub_agents_total Anzahl Agenten",
-        f'aihub_agents_total{{tenant="{m["tenant"]}"}} {m["agents"]["total"]}',
-        f'aihub_agents_working{{tenant="{m["tenant"]}"}} {m["agents"]["working"]}',
-        f'aihub_projects_active{{tenant="{m["tenant"]}"}} {m["projects"]["active"]}',
-        f'aihub_tasks_done{{tenant="{m["tenant"]}"}} {m["tasks"]["done"]}',
-        f'aihub_tasks_open{{tenant="{m["tenant"]}"}} {m["tasks"]["open"]}',
-        f'aihub_cost_usd{{tenant="{m["tenant"]}"}} {m["usage"]["cost_usd"]}',
-        f'aihub_tokens_in{{tenant="{m["tenant"]}"}} {m["usage"]["tokens_in"]}',
-        f'aihub_tokens_out{{tenant="{m["tenant"]}"}} {m["usage"]["tokens_out"]}',
+        "# HELP foundryhub_agents_total Anzahl Agenten",
+        f'foundryhub_agents_total{{tenant="{m["tenant"]}"}} {m["agents"]["total"]}',
+        f'foundryhub_agents_working{{tenant="{m["tenant"]}"}} {m["agents"]["working"]}',
+        f'foundryhub_projects_active{{tenant="{m["tenant"]}"}} {m["projects"]["active"]}',
+        f'foundryhub_tasks_done{{tenant="{m["tenant"]}"}} {m["tasks"]["done"]}',
+        f'foundryhub_tasks_open{{tenant="{m["tenant"]}"}} {m["tasks"]["open"]}',
+        f'foundryhub_cost_usd{{tenant="{m["tenant"]}"}} {m["usage"]["cost_usd"]}',
+        f'foundryhub_tokens_in{{tenant="{m["tenant"]}"}} {m["usage"]["tokens_in"]}',
+        f'foundryhub_tokens_out{{tenant="{m["tenant"]}"}} {m["usage"]["tokens_out"]}',
     ]
     return PlainTextResponse("\n".join(lines) + "\n")
 

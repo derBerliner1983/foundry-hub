@@ -11,7 +11,7 @@ def _bool(name: str, default: bool = False) -> bool:
 
 class Config:
     # Persistenz
-    DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:////data/aihub.db")
+    DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:////data/foundryhub.db")
 
     # API-Keys (Cloud-Provider). Leer = Provider nicht nutzbar -> Mock greift.
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")

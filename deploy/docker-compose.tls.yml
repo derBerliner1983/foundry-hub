@@ -9,7 +9,7 @@ services:
 
   nginx:
     image: nginx:alpine
-    container_name: aihub-nginx
+    container_name: foundryhub-nginx
     ports:
       - "80:80"
       - "443:443"

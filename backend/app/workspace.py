@@ -145,7 +145,7 @@ def _ws_exec(project_id, command: str, timeout: int = 60) -> dict:
         return {"ok": False, "stdout": "", "stderr": str(e)}
 
 
-_GIT = "git -c user.email=aihub@local -c user.name=AI-Hub"
+_GIT = "git -c user.email=foundryhub@local -c user.name=Foundry-Hub"
 
 
 def git_autocommit(project_id, message: str) -> dict:

@@ -1,6 +1,6 @@
-# AI-Hub – deine selbstorganisierende KI-Agentur
+# Foundry-Hub – deine selbstorganisierende KI-Agentur
 
-AI-Hub ist ein Docker-System, in dem **KI-Agenten als Firma zusammenarbeiten**.
+Foundry-Hub ist ein Docker-System, in dem **KI-Agenten als Firma zusammenarbeiten**.
 Du gibst dem **Chef** einen Auftrag, er **stellt Projektleiter ein**, die wiederum
 **Planer, UX-Designer, Entwickler und QA** einstellen. Alle kommunizieren über eine
 **Inbox**, jede Leistung wird **bewertet**, Agenten können **kündigen** oder
@@ -72,7 +72,7 @@ weiterhin als Alternative.
 
 ## Mehrbenutzer & Login
 
-AI-Hub ist **mehrbenutzerfähig**:
+Foundry-Hub ist **mehrbenutzerfähig**:
 
 - **Login** mit gehashtem Passwort (scrypt) und sicherem Session-Cookie
   (bei HTTPS automatisch `Secure`).
@@ -158,7 +158,7 @@ die Firma**:
   ihm gegenüber „auf", und die Firma übernimmt die Umsetzung.
 - **E-Mail senden** – per **SMTP** direkt aus der App.
 
-**E-Mail-Benachrichtigungen:** Optional schickt dir AI-Hub eine E-Mail bei
+**E-Mail-Benachrichtigungen:** Optional schickt dir Foundry-Hub eine E-Mail bei
 **Verzug** (überfälliger Meilenstein) und bei **neuen Rückfragen/Freigaben** –
 einstellbar unter *Einstellungen → E-Mail & Benachrichtigungen*. Zugangsdaten
 (SMTP/IMAP) kommen sicher aus der `.env`, nicht aus der Datenbank.
@@ -230,7 +230,7 @@ bearbeiten, aktiv/inaktiv schalten oder löschen.
   Agenten nutzen sie mit `use_skill`; hat ein Skill einen Befehl (`{args}` wird
   ersetzt), wird er im Workspace ausgeführt, sonst dient er als Vorgehens-Vorlage.
 - **MCP-Server (echter Client, dauerhafte Sitzungen)** – externe MCP-Server
-  eintragen (stdio/http). Per **Verbinden** lädt AI-Hub die echte Tool-Liste
+  eintragen (stdio/http). Per **Verbinden** lädt Foundry-Hub die echte Tool-Liste
   (JSON-RPC `tools/list`). Agenten rufen Tools wirklich auf (Aktion `mcp_call` →
   `tools/call`); das Ergebnis kommt als Nachricht zurück. Verbindungen werden in
   einem **Session-Pool dauerhaft gehalten** und wiederverwendet (nur einmal
@@ -370,10 +370,10 @@ pausiert). Der Hauptschalter *Agenten laufen automatisch* pausiert alles.
 
 ### Obsidian-Vault als „Gehirn"
 
-AI-Hub kann eine **Obsidian-Vault** (Ordner mit Markdown-Dateien) als gemeinsames
+Foundry-Hub kann eine **Obsidian-Vault** (Ordner mit Markdown-Dateien) als gemeinsames
 Wissen nutzen: Agenten schreiben Erkenntnisse als Notiz (`write_note`), du siehst
 und bearbeitest sie direkt in **Obsidian**, und die Wissenssuche durchsucht die
-Vault mit. Pro Firma ein Unterordner unter `<Vault>/AI-Hub/tenant_<id>/`, damit es
+Vault mit. Pro Firma ein Unterordner unter `<Vault>/Foundry-Hub/tenant_<id>/`, damit es
 mit einer bestehenden Vault koexistiert.
 
 Eigene Vault einhängen (in `docker-compose.yml`):
@@ -410,7 +410,7 @@ andere erledigt sind; blockierte Karten sind markiert (⛔).
 
 ### Budget & Kosten
 
-AI-Hub erfasst den **Token-Verbrauch** jedes LLM-Aufrufs und schätzt die Kosten
+Foundry-Hub erfasst den **Token-Verbrauch** jedes LLM-Aufrufs und schätzt die Kosten
 je Modell (lokale Modelle = 0). Unter *Einstellungen → Budget* siehst du den
 Verbrauch (gesamt, je Modell) und setzt ein **Budget-Limit (USD)**: Wird es
 überschritten, **pausiert die Firma automatisch** (einmalige Meldung); ein
@@ -509,7 +509,7 @@ als Alternative – beides geht.
 | `OPENAI_API_KEY` | – | OpenAI-Cloud aktivieren |
 | `OPENROUTER_API_KEY` / `MISTRAL_API_KEY` / `GEMINI_API_KEY` | – | weitere LLM-Provider |
 | `SLACK_WEBHOOK` / `DISCORD_WEBHOOK` | – | Benachrichtigungen in Slack/Discord |
-| `APP_SECRET_KEY` | – | Hauptschlüssel zum Verschlüsseln der Zugangsdaten (leer = generiert unter `/data/.aihub_key`) |
+| `APP_SECRET_KEY` | – | Hauptschlüssel zum Verschlüsseln der Zugangsdaten (leer = generiert unter `/data/.foundryhub_key`) |
 | `IP_ALLOWLIST` | – | Zugriff auf IPs/CIDR beschränken (CSV); leer = kein IP-Filter |
 | `BRAVE_API_KEY` | – | Web-Suche über Brave statt DuckDuckGo |
 | `MCP_FS_ROOT` | = `WORKSPACE_DIR` | Wurzel für die MCP-Server `filesystem`/`git` |
@@ -533,11 +533,11 @@ Viele Werte lassen sich auch **live in der UI** unter *Einstellungen* ändern.
 
 ## Hinweise & Grenzen
 
-- **Persistenz**: Datenbank und Workspaces liegen im Docker-Volume `aihub-data`
+- **Persistenz**: Datenbank und Workspaces liegen im Docker-Volume `foundryhub-data`
   und überstehen Neustarts.
 - **PostgreSQL** (für mehr Last/mehrere Nutzer): mitgeliefertes Compose-Profil
   starten (`docker compose --profile postgres up -d`) und
-  `DATABASE_URL=postgresql+psycopg://aihub:aihub@postgres:5432/aihub` setzen – der
+  `DATABASE_URL=postgresql+psycopg://foundryhub:foundryhub@postgres:5432/foundryhub` setzen – der
   Treiber ist enthalten, SQLAlchemy nutzt ihn automatisch.
 - **Vollständiges Backup**: *Einstellungen → Sicherung → „Vollständiges Backup
   (ZIP)"* lädt DB-Snapshot + alle Projekt-Workspaces + Vault-Notizen.

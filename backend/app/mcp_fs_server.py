@@ -60,4 +60,4 @@ def dispatch(name, args):
 
 
 if __name__ == "__main__":
-    serve("ai-hub-filesystem", TOOLS, dispatch)
+    serve("foundry-hub-filesystem", TOOLS, dispatch)

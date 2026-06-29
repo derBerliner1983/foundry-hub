@@ -24,4 +24,4 @@ def dispatch(name, args):
 
 
 if __name__ == "__main__":
-    serve("ai-hub-demo", TOOLS, dispatch)
+    serve("foundry-hub-demo", TOOLS, dispatch)
