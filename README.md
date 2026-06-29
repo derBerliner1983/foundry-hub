@@ -334,9 +334,32 @@ pausiert). Der Hauptschalter *Agenten laufen automatisch* pausiert alles.
   wöchentlich) als Projekt oder Einzelaufgabe.
 - **Sprach-Eingabe** – Aufträge per Mikrofon diktieren (Browser-Spracherkennung).
 - **2FA (TOTP)** – optional pro Konto; Login fragt dann zusätzlich den 6-stelligen
-  Code ab. **Telegram-Benachrichtigungen** zusätzlich zur E-Mail.
-- **Backup** – vollständiger JSON-Export der Firma; Import von Regeln/Skills/
-  MCP-Servern aus einem Export.
+  Code ab. Benachrichtigungen per **E-Mail, Telegram, Slack & Discord**, plus
+  optionalem **täglichem Überblick** per Mail.
+- **Backup & Wiederherstellung** – vollständiges ZIP (DB-Snapshot + Workspaces +
+  Vault), Wiederherstellung aus ZIP, **automatische tägliche Sicherung** mit
+  Aufbewahrung; Import von Regeln/Skills/MCP-Servern aus einem Export.
+
+### Sicherheit & Betrieb
+
+- **Verschlüsselte Zugangsdaten** – API-Keys/Passwörter werden verschlüsselt in der
+  DB abgelegt (Encrypt-then-MAC, `APP_SECRET_KEY` oder generierter Schlüssel),
+  nie im Klartext und nie an die Oberfläche zurückgegeben.
+- **Sitzungsverwaltung** – angemeldete Geräte (IP, Browser, zuletzt aktiv)
+  einsehen und einzeln oder alle anderen abmelden.
+- **Rate-Limiting & IP-Allowlist** – pro IP gedrosselt (Login & API);
+  optional `IP_ALLOWLIST` (CSV/CIDR), respektiert `X-Forwarded-For` hinter dem
+  Reverse-Proxy.
+- **Metriken** – `GET /api/metrics` (JSON) und `/api/metrics/prometheus`.
+- **PostgreSQL** – optional über das Compose-Profil `postgres`.
+- **Auto-Migration** – fehlende Spalten werden beim Start automatisch ergänzt.
+
+### Globale Suche & DAG-Aufgaben
+
+- **Globale Suche** (Topbar) über Projekte, Aufgaben, Nachrichten, Agenten, Regeln
+  und Wissen – mit direktem Sprung zur passenden Ansicht.
+- **Aufgaben-Abhängigkeiten (DAG)** – eine Aufgabe startet erst, wenn die
+  vorausgesetzten Aufgaben erledigt sind; blockierte Karten sind im Kanban markiert.
 
 ### Obsidian-Vault als „Gehirn"
 
@@ -356,16 +379,20 @@ Eigene Vault einhängen (in `docker-compose.yml`):
 ### Kanban & Aufgaben
 
 Die **Aufgaben**-Ansicht ist ein **Kanban-Board** (Offen · In Arbeit · Review ·
-Erledigt) – Karten per **Drag & Drop** zwischen den Spalten verschieben.
+Erledigt) – Karten per **Drag & Drop** zwischen den Spalten verschieben. Über
+**Abhängigkeiten** lässt sich festlegen, dass eine Aufgabe erst startet, wenn
+andere erledigt sind; blockierte Karten sind markiert (⛔).
 
 ### Wissensspeicher & Audit
 
-- **Wissensspeicher (Vektor-RAG)** – unter *Wissen* legst du Notizen ab oder lädst
-  Dateien (txt/md/Code) hoch. Agenten durchsuchen das per `search_memory` – **inkl.
-  aller früheren Entscheidungen** der Firma. Ist ein **OpenAI-Key** oder **Ollama**
-  (`nomic-embed-text`) verfügbar, läuft eine echte **Vektor-Suche (Embeddings,
-  Cosinus-Ähnlichkeit)**; sonst eine Stichwortsuche. Button „Vektor-Index" berechnet
-  die Embeddings neu.
+- **Wissensspeicher (Vektor-RAG)** – unter *Wissen* legst du Notizen ab, lädst
+  Dateien (txt/md/Code/**PDF**/**DOCX**) hoch oder liest eine **Webseite** ein.
+  Lange Texte werden in **überlappende Abschnitte (Chunks)** zerlegt und je
+  Abschnitt eingebettet (besseres Retrieval). Agenten durchsuchen das per
+  `search_memory` – **inkl. aller früheren Entscheidungen** der Firma. Ist ein
+  **OpenAI-Key** oder **Ollama** (`nomic-embed-text`) verfügbar, läuft eine echte
+  **Vektor-Suche (Embeddings, Cosinus-Ähnlichkeit)**; sonst eine Stichwortsuche.
+  Button „Vektor-Index" berechnet die Embeddings neu.
 - **Live-Vorschau** – statische HTML-Dateien direkt im Browser (👁); für **laufende
   Web-Apps** startet „Vorschau" einen Dev-Server im Sandbox-Container (Port 8090)
   und öffnet ihn (eigener Befehl wie `npm run dev` möglich).
@@ -399,9 +426,10 @@ höheres Limit hebt die Pause wieder auf. Eine Kosten-Kachel steht im Dashboard.
 |--------|---------|
 | Backend / API | FastAPI (Python) + Hintergrund-Orchestrator (Runden-Engine) |
 | Datenbank | SQLite (Standard) – oder **PostgreSQL** via `DATABASE_URL` |
-| LLM-Provider | Claude · OpenAI · Ollama · Mock (austauschbar, reines REST) |
+| LLM-Provider | Claude · OpenAI · Ollama · OpenRouter · Mistral · Gemini · Mock (austauschbar, reines REST, mit Fallback-Kette) |
 | Frontend | Vanilla JS + eigenes Design-System (Dark-Dashboard, lucide-Icons) |
-| Betrieb | Docker Compose (App + Ollama) |
+| Betrieb | Docker Compose (App + Sandbox + Ollama; optional PostgreSQL) |
+| Sicherheit | Login + 2FA, verschlüsselte Zugangsdaten, Sitzungsverwaltung, Rate-Limit, optionale IP-Allowlist |
 
 ```
 backend/app/
@@ -443,6 +471,9 @@ Kontext (Rolle, Team, Nachrichten, Aufgaben, **geltende Regeln**, verfügbare
 | `add_rule` | Standard/Regel im Cookbook anlegen |
 | `use_skill` | Skill nutzen (Befehl ausführen oder Vorgehen anwenden) |
 | `mcp_call` | Echtes MCP-Tool eines verbundenen Servers aufrufen |
+| `add_milestone` | Meilenstein anlegen (Aufgaben zuordnen, Fortschritt) |
+| `search_memory` / `write_note` | Wissensspeicher/Vault durchsuchen bzw. Notiz schreiben |
+| `deploy` / `github_push` | Projekt ausliefern bzw. nach GitHub pushen |
 
 So entsteht die Zusammenarbeit. Ergebnisse von Fachkräften sind Text-Artefakte
 (Konzept, Plan) **oder** echte Dateien im Workspace (Code), je nach Aufgabe.
@@ -469,6 +500,10 @@ als Alternative – beides geht.
 |----------|----------|-----------|
 | `ANTHROPIC_API_KEY` | – | Claude-Cloud aktivieren |
 | `OPENAI_API_KEY` | – | OpenAI-Cloud aktivieren |
+| `OPENROUTER_API_KEY` / `MISTRAL_API_KEY` / `GEMINI_API_KEY` | – | weitere LLM-Provider |
+| `SLACK_WEBHOOK` / `DISCORD_WEBHOOK` | – | Benachrichtigungen in Slack/Discord |
+| `APP_SECRET_KEY` | – | Hauptschlüssel zum Verschlüsseln der Zugangsdaten (leer = generiert unter `/data/.aihub_key`) |
+| `IP_ALLOWLIST` | – | Zugriff auf IPs/CIDR beschränken (CSV); leer = kein IP-Filter |
 | `BRAVE_API_KEY` | – | Web-Suche über Brave statt DuckDuckGo |
 | `MCP_FS_ROOT` | = `WORKSPACE_DIR` | Wurzel für die MCP-Server `filesystem`/`git` |
 | `SMTP_HOST`/`_PORT`/`_USER`/`_PASS`/`_FROM` | – | E-Mail senden (Benachrichtigungen & Assistent) |
@@ -493,8 +528,9 @@ Viele Werte lassen sich auch **live in der UI** unter *Einstellungen* ändern.
 
 - **Persistenz**: Datenbank und Workspaces liegen im Docker-Volume `aihub-data`
   und überstehen Neustarts.
-- **PostgreSQL** (für mehr Last/mehrere Nutzer): einen Postgres-Container starten
-  und `DATABASE_URL=postgresql+psycopg://user:pass@host:5432/aihub` setzen – der
+- **PostgreSQL** (für mehr Last/mehrere Nutzer): mitgeliefertes Compose-Profil
+  starten (`docker compose --profile postgres up -d`) und
+  `DATABASE_URL=postgresql+psycopg://aihub:aihub@postgres:5432/aihub` setzen – der
   Treiber ist enthalten, SQLAlchemy nutzt ihn automatisch.
 - **Vollständiges Backup**: *Einstellungen → Sicherung → „Vollständiges Backup
   (ZIP)"* lädt DB-Snapshot + alle Projekt-Workspaces + Vault-Notizen.
