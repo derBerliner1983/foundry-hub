@@ -28,13 +28,36 @@ usage() {
   cat <<EOF
 Foundry-Hub – install.sh
 
-  ./install.sh                          Installation/Start (interaktiv)
-  ./install.sh --list-users             vorhandene Benutzer anzeigen
-  ./install.sh --admin-newpass [PW]     Owner-Passwort neu setzen (fragt, wenn PW fehlt)
-  ./install.sh --admin-newpass PW --admin-user NAME   Passwort eines bestimmten Nutzers
-  ./install.sh -h | --help              diese Hilfe
+Was das Skript kann:
 
-Hinweis: Die Reset-Optionen brauchen einen laufenden Container (foundryhub-app).
+  INSTALLATION / START
+    ./install.sh
+        Interaktiver Ablauf:
+          • prüft Docker & Docker Compose – und bietet bei Bedarf die
+            Installation per apt an (offizielles Docker-Repo)
+          • legt .env an und erzeugt einen festen APP_SECRET_KEY
+          • fragt die Ollama-Anbindung ab:
+              1) vorhandenes Ollama auf dem Host nutzen
+              2) Ollama-Container mitstarten  (--profile ollama)
+              3) ohne Ollama (nur Cloud/Mock)
+          • optional HTTPS/nginx
+          • baut & startet die Container und wartet auf die App
+
+  BENUTZER / PASSWORT  (Container muss laufen)
+    ./install.sh --list-users
+        zeigt vorhandene Benutzernamen (mit Owner-/2FA-Markierung)
+    ./install.sh --admin-newpass [PW]
+        setzt das Owner-Passwort neu; ohne PW wird sicher nachgefragt
+        (entfernt 2FA und beendet bestehende Sitzungen)
+    ./install.sh --admin-newpass PW --admin-user NAME
+        Passwort eines bestimmten Kontos neu setzen
+
+  HILFE
+    ./install.sh -h | --help | --hilfe
+        diese Übersicht
+
+Nach Updates:  git pull && docker compose up -d --build
+Weitere Details stehen in ANLEITUNG.md und README.md.
 EOF
 }
 
@@ -51,7 +74,7 @@ while [ $# -gt 0 ]; do
       ;;
     --admin-user) TARGET_USER="${2:-}"; shift ;;
     --list-users) MODE="listusers" ;;
-    -h|--help) usage; exit 0 ;;
+    -h|--help|--hilfe|hilfe) usage; exit 0 ;;
     *) warn "Unbekanntes Argument: $1" ;;
   esac
   shift
