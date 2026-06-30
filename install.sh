@@ -24,6 +24,63 @@ ask() {  # ask "Frage" "N"  -> 0 (ja) / 1 (nein); default per 2. Param
   [[ "$yn" =~ ^[jJyY]$ ]]
 }
 
+usage() {
+  cat <<EOF
+Foundry-Hub – install.sh
+
+  ./install.sh                          Installation/Start (interaktiv)
+  ./install.sh --list-users             vorhandene Benutzer anzeigen
+  ./install.sh --admin-newpass [PW]     Owner-Passwort neu setzen (fragt, wenn PW fehlt)
+  ./install.sh --admin-newpass PW --admin-user NAME   Passwort eines bestimmten Nutzers
+  ./install.sh -h | --help              diese Hilfe
+
+Hinweis: Die Reset-Optionen brauchen einen laufenden Container (foundryhub-app).
+EOF
+}
+
+# --------------------------------------------------------------------------- #
+# Argumente: Sonder-Modi (Passwort-Reset / Nutzerliste / Hilfe)
+# --------------------------------------------------------------------------- #
+MODE="install"; NEWPASS=""; TARGET_USER=""
+APP_CONTAINER="foundryhub-app"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --admin-newpass)
+      MODE="newpass"
+      if [ -n "${2:-}" ] && [ "${2#--}" = "${2:-}" ]; then NEWPASS="$2"; shift; fi
+      ;;
+    --admin-user) TARGET_USER="${2:-}"; shift ;;
+    --list-users) MODE="listusers" ;;
+    -h|--help) usage; exit 0 ;;
+    *) warn "Unbekanntes Argument: $1" ;;
+  esac
+  shift
+done
+
+if [ "$MODE" = "newpass" ] || [ "$MODE" = "listusers" ]; then
+  command -v docker >/dev/null 2>&1 || { err "Docker nicht gefunden."; exit 1; }
+  if ! docker inspect -f '{{.State.Running}}' "$APP_CONTAINER" 2>/dev/null | grep -q true; then
+    err "Container '$APP_CONTAINER' läuft nicht. Zuerst starten: ./install.sh  (oder docker compose up -d)"
+    exit 1
+  fi
+  if [ "$MODE" = "listusers" ]; then
+    docker exec -i "$APP_CONTAINER" python -m backend.reset_password
+    exit 0
+  fi
+  # Passwort abfragen, falls nicht als Argument übergeben (sicherer: nicht in der History)
+  if [ -z "$NEWPASS" ]; then
+    read -r -s -p "Neues Passwort (min. 6 Zeichen): " NEWPASS; echo
+    read -r -s -p "Passwort wiederholen: " NEWPASS2; echo
+    if [ "$NEWPASS" != "$NEWPASS2" ]; then err "Passwörter stimmen nicht überein."; exit 1; fi
+  fi
+  if [ -n "$TARGET_USER" ]; then
+    docker exec -i "$APP_CONTAINER" python -m backend.reset_password "$TARGET_USER" "$NEWPASS"
+  else
+    docker exec -i "$APP_CONTAINER" python -m backend.reset_password "$NEWPASS"
+  fi
+  exit $?
+fi
+
 # --------------------------------------------------------------------------- #
 # Docker-APT-Repo einrichten + Pakete installieren (Debian/Ubuntu)
 # --------------------------------------------------------------------------- #
