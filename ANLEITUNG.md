@@ -150,6 +150,25 @@ Docker-Volumes und bleiben erhalten.
   Zugriff; zusätzlich gilt ein Rate-Limit pro IP (Login & API).
 - **Metriken**: `GET /api/metrics` (JSON) und `/api/metrics/prometheus`.
 
+## Passwort vergessen / Login klappt nicht
+
+Es gibt bewusst **kein** Standard-Passwort und keinen öffentlichen Reset-Link.
+Wenn du dich aussperrst, setzt du das Passwort im laufenden Container neu:
+
+```bash
+# 1) Vorhandene Benutzernamen anzeigen (richtigen Namen prüfen):
+docker exec -it foundryhub-app python -m backend.reset_password
+
+# 2) Passwort des Owners neu setzen (entfernt zugleich 2FA und meldet alle
+#    bestehenden Sitzungen ab):
+docker exec -it foundryhub-app python -m backend.reset_password "DEIN-NEUES-PASSWORT"
+
+# oder gezielt für einen bestimmten Benutzer:
+docker exec -it foundryhub-app python -m backend.reset_password BENUTZER "DEIN-NEUES-PASSWORT"
+```
+
+Danach mit dem angezeigten **Benutzernamen** und dem neuen Passwort anmelden.
+
 ## Befehle
 
 ```bash
