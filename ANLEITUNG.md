@@ -153,21 +153,24 @@ Docker-Volumes und bleiben erhalten.
 ## Passwort vergessen / Login klappt nicht
 
 Es gibt bewusst **kein** Standard-Passwort und keinen öffentlichen Reset-Link.
-Wenn du dich aussperrst, setzt du das Passwort im laufenden Container neu:
+Wenn du dich aussperrst, setzt du das Passwort bei laufendem Container neu –
+am einfachsten über `install.sh`:
 
 ```bash
-# 1) Vorhandene Benutzernamen anzeigen (richtigen Namen prüfen):
-docker exec -it foundryhub-app python -m backend.reset_password
-
-# 2) Passwort des Owners neu setzen (entfernt zugleich 2FA und meldet alle
-#    bestehenden Sitzungen ab):
-docker exec -it foundryhub-app python -m backend.reset_password "DEIN-NEUES-PASSWORT"
-
-# oder gezielt für einen bestimmten Benutzer:
-docker exec -it foundryhub-app python -m backend.reset_password BENUTZER "DEIN-NEUES-PASSWORT"
+./install.sh --list-users                 # Benutzernamen anzeigen (richtigen Namen prüfen)
+./install.sh --admin-newpass              # Owner-Passwort neu setzen (fragt sicher nach)
+./install.sh --admin-newpass "PASSWORT"   # direkt setzen
+./install.sh --admin-newpass "PASSWORT" --admin-user BENUTZER   # bestimmtes Konto
 ```
 
+Das entfernt zugleich **2FA** und beendet alle **bestehenden Sitzungen**.
 Danach mit dem angezeigten **Benutzernamen** und dem neuen Passwort anmelden.
+
+Alternativ direkt im Container:
+
+```bash
+docker exec -it foundryhub-app python -m backend.reset_password "DEIN-NEUES-PASSWORT"
+```
 
 ## Befehle
 
