@@ -24,6 +24,26 @@ ask() {  # ask "Frage" "N"  -> 0 (ja) / 1 (nein); default per 2. Param
   [[ "$yn" =~ ^[jJyY]$ ]]
 }
 
+COMPOSE=""
+detect_compose() {  # setzt COMPOSE (best effort, ohne Installation)
+  if docker compose version >/dev/null 2>&1; then COMPOSE="docker compose"
+  elif command -v docker-compose >/dev/null 2>&1; then COMPOSE="docker-compose"
+  else COMPOSE=""; fi
+}
+
+rebuild_and_wait() {  # baut & startet die Container neu und wartet auf die App
+  detect_compose
+  [ -n "$COMPOSE" ] || { err "Docker Compose nicht gefunden."; return 1; }
+  info "Baue und starte Container neu …"
+  # shellcheck disable=SC2086
+  $COMPOSE up -d --build || return 1
+  info "Warte auf den Start der App …"
+  for _ in $(seq 1 60); do
+    curl -fsS http://localhost:8000/api/health >/dev/null 2>&1 && break
+    sleep 2
+  done
+}
+
 usage() {
   cat <<EOF
 Foundry-Hub – install.sh
@@ -82,15 +102,26 @@ done
 
 if [ "$MODE" = "newpass" ] || [ "$MODE" = "listusers" ]; then
   command -v docker >/dev/null 2>&1 || { err "Docker nicht gefunden."; exit 1; }
+  # Container läuft? Sonst anbieten, ihn zu bauen & starten.
   if ! docker inspect -f '{{.State.Running}}' "$APP_CONTAINER" 2>/dev/null | grep -q true; then
-    err "Container '$APP_CONTAINER' läuft nicht. Zuerst starten: ./install.sh  (oder docker compose up -d)"
-    exit 1
+    warn "Container '$APP_CONTAINER' läuft nicht."
+    if ask "Jetzt bauen & starten? [J/n]" "J"; then
+      rebuild_and_wait || { err "Start fehlgeschlagen. Logs prüfen: $COMPOSE logs -f app"; exit 1; }
+    else
+      err "Zuerst starten: ./install.sh"
+      exit 1
+    fi
   fi
-  # Prüfen, ob das Reset-Tool im Image vorhanden ist (alte Images kennen es nicht)
+  # Reset-Tool im Image vorhanden? (alte Images kennen es noch nicht -> neu bauen anbieten)
   if ! docker exec -i "$APP_CONTAINER" python -c "import backend.reset_password" >/dev/null 2>&1; then
-    err "Der laufende Container kennt das Reset-Tool noch nicht (altes Image)."
-    err "Bitte zuerst aktualisieren:  git pull && docker compose up -d --build"
-    exit 1
+    warn "Der laufende Container ist ein altes Image (kennt das Reset-Tool noch nicht)."
+    if ask "Jetzt neu bauen (docker compose up -d --build)? [J/n]" "J"; then
+      rebuild_and_wait || { err "Neubau fehlgeschlagen. Logs prüfen: $COMPOSE logs -f app"; exit 1; }
+    fi
+    if ! docker exec -i "$APP_CONTAINER" python -c "import backend.reset_password" >/dev/null 2>&1; then
+      err "Reset-Tool weiterhin nicht gefunden. Aktuellen Stand holen ('git pull') und erneut versuchen."
+      exit 1
+    fi
   fi
   if [ "$MODE" = "listusers" ]; then
     docker exec -i "$APP_CONTAINER" python -m backend.reset_password
