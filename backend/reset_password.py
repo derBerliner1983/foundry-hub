@@ -11,11 +11,27 @@ Im laufenden Container ausführen (Arbeitsverzeichnis /app):
 Ohne Benutzernamen wird der erste Owner genommen:
     docker exec -it foundryhub-app python -m backend.reset_password --owner <neues-passwort>
 """
+import os
 import sys
 
-from backend.app.database import SessionLocal
-from backend.app.models import Session as DBSession, User
-from backend.app import auth
+# Funktioniert sowohl als Modul (python -m backend.reset_password) als auch
+# direkt per Pfad (python /app/backend/reset_password.py): den Ordner, der das
+# Paket "backend" enthält, auf den Importpfad legen.
+_HERE = os.path.dirname(os.path.abspath(__file__))          # …/backend
+_ROOT = os.path.dirname(_HERE)                              # …/ (enthält "backend")
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+try:
+    from backend.app.database import SessionLocal
+    from backend.app.models import Session as DBSession, User
+    from backend.app import auth
+except ModuleNotFoundError:  # Fallback, falls "backend" nicht als Paket sichtbar ist
+    if _HERE not in sys.path:
+        sys.path.insert(0, _HERE)
+    from app.database import SessionLocal
+    from app.models import Session as DBSession, User
+    from app import auth
 
 
 def list_users():
