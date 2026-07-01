@@ -86,6 +86,12 @@ if [ "$MODE" = "newpass" ] || [ "$MODE" = "listusers" ]; then
     err "Container '$APP_CONTAINER' läuft nicht. Zuerst starten: ./install.sh  (oder docker compose up -d)"
     exit 1
   fi
+  # Prüfen, ob das Reset-Tool im Image vorhanden ist (alte Images kennen es nicht)
+  if ! docker exec -i "$APP_CONTAINER" python -c "import backend.reset_password" >/dev/null 2>&1; then
+    err "Der laufende Container kennt das Reset-Tool noch nicht (altes Image)."
+    err "Bitte zuerst aktualisieren:  git pull && docker compose up -d --build"
+    exit 1
+  fi
   if [ "$MODE" = "listusers" ]; then
     docker exec -i "$APP_CONTAINER" python -m backend.reset_password
     exit 0
